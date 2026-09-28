@@ -1,0 +1,41 @@
+
+# API-ключи
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Сборка
+build/
+dist/
+installer/
+
+# macOS
+.DS_Store
+
+# Пользовательские настройки
+settings.json
+
+# Локальные базы и кэш
+drawing_db.json
+drawing_db.backup*.json
+drawing_db.json.bak_*
+embeddings_cache.json
+
+# Локальные архивы
+project.zip
+
+
+# Архивы и бинарные сборки
+*.zip
+*.app/
+*.exe
+
+# Локальные резервные копии
+*.bak
+*.bak_*
