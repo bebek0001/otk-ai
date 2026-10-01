@@ -21,6 +21,7 @@ import customtkinter as ctk
 
 from integrations.kompas.connector import connect, is_available, ConnectionStatus
 from integrations.kompas.probe import generate_report
+from integrations.kompas.adapter import read_active_part
 from core import logger
 
 
@@ -62,7 +63,14 @@ class KompasToolScreen(ctk.CTkFrame):
             top, text="Считать диагностику", height=36, corner_radius=12,
             command=self.on_probe,
         )
-        self._probe_btn.grid(row=0, column=3, padx=(0, 16), pady=12)
+        self._probe_btn.grid(row=0, column=3, padx=(0, 8), pady=12)
+
+        self._read_btn = ctk.CTkButton(
+            top, text="Прочитать активную деталь", height=36, corner_radius=12,
+            fg_color="#2E7D32", hover_color="#1B5E20",
+            command=self.on_read_part,
+        )
+        self._read_btn.grid(row=0, column=4, padx=(0, 16), pady=12)
 
         card = ctk.CTkFrame(
             self, corner_radius=12, fg_color=("gray92", "#141416"),
@@ -114,6 +122,57 @@ class KompasToolScreen(ctk.CTkFrame):
         self._probe_btn.configure(state="normal", text="Считать диагностику")
         self._set_output(report)
         logger.info("Диагностика КОМПАС считана и показана на вкладке")
+
+    def on_read_part(self):
+        self._read_btn.configure(state="disabled", text="Читаю…")
+        self._set_output("Читаю активную деталь из КОМПАСа… подождите несколько секунд.")
+        threading.Thread(target=self._read_part_worker, daemon=True).start()
+
+    def _read_part_worker(self):
+        try:
+            result = read_active_part()
+        except Exception as e:                             # noqa: BLE001
+            result = None
+            error_text = f"Непредвиденная ошибка: {e}"
+        else:
+            error_text = ""
+        self.after(0, self._apply_read_result, result, error_text)
+
+    def _apply_read_result(self, result, error_text: str):
+        self._read_btn.configure(state="normal", text="Прочитать активную деталь")
+
+        if result is None:
+            self._set_output(error_text)
+            logger.error(f"КОМПАС(live): {error_text}")
+            return
+
+        lines = [
+            "=== OTK AI: чтение активной детали из КОМПАС-3D ===",
+            f"Статус: {result.status}",
+        ]
+        if result.message:
+            lines.append(result.message)
+        lines.append("")
+        lines.append(f"Обозначение: {result.drawing_no or '—'}")
+        lines.append(f"Наименование: {result.part_name or '—'}")
+        lines.append(f"Материал: {result.material_mark or '—'}")
+        lines.append(f"Масса, кг: {result.mass_kg if result.mass_kg is not None else '—'}")
+        if result.volume_mm3 is not None:
+            lines.append(f"Объём, мм³: {result.volume_mm3}")
+        if result.density_kg_m3 is not None:
+            lines.append(f"Плотность, кг/м³: {result.density_kg_m3}")
+        lines.append(f"Источник: {result.source or '—'}")
+        if result.result_line:
+            lines.append("")
+            lines.append("Результат из базы эталонов:")
+            lines.append(result.result_line)
+        if result.raw_debug:
+            lines.append("")
+            lines.append("--- Технические детали (для разбора, если что-то не так) ---")
+            lines.append(result.raw_debug)
+
+        self._set_output("\n".join(lines))
+        logger.info(f"КОМПАС(live): прочитана деталь {result.drawing_no or result.part_name}")
 
     def _refresh_worker(self):
         status = connect() if is_available() else ConnectionStatus(
