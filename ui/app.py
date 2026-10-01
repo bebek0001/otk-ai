@@ -6,6 +6,7 @@ from ui.screens.model3d_tool import Model3DToolScreen
 from ui.screens.ai_assistant import AIAssistantScreen
 from ui.screens.batch_tool import BatchToolScreen
 from ui.screens.kompas_tool import KompasToolScreen
+from ui.screens.m3d_only_tool import M3DOnlyToolScreen
 from core import logger
 
 
@@ -121,6 +122,7 @@ class Sidebar(ctk.CTkFrame):
         items = [
             ("PDF инструмент",  "pdf"),
             ("3D инструмент",   "model3d"),
+            ("М3D инструмент",  "m3d_only"),
             ("ИИ Ассистент",    "ai_assistant"),
             ("Пакетная обработка", "batch"),
             ("КОМПАС",          "kompas"),
@@ -211,6 +213,8 @@ class App(ctk.CTk):
             self.current = DrawingToolScreen(self.content)
         elif key == "model3d":
             self.current = Model3DToolScreen(self.content)
+        elif key == "m3d_only":
+            self.current = M3DOnlyToolScreen(self.content)
         elif key == "ai_assistant":
             self.current = AIAssistantScreen(self.content)
         elif key == "batch":
