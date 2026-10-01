@@ -88,6 +88,23 @@ def generate_report() -> str:
     app = status.app
     _dump_attrs("Приложение (app)", app, out)
 
+    # Только разведка (ничего не открываем и не закрываем!) — коллекция
+    # Documents нужна для будущей пакетной обработки .m3d через живой
+    # КОМПАС (открыть файл В ФОНЕ, не трогая то, что уже видно пользователю).
+    # Вызывать Open/Close вслепую, не зная точной сигнатуры, рискованно —
+    # поэтому здесь только dir() и Count, без единого реального вызова.
+    try:
+        docs = getattr(app, "Documents", None)
+    except Exception as e:                                 # noqa: BLE001
+        print(f"\napp.Documents -> ошибка: {e}", file=out)
+    else:
+        if docs is not None:
+            _dump_attrs("app.Documents (коллекция, для будущей пакетной обработки)", docs, out)
+            try:
+                print(f"  Count = {docs.Count}", file=out)
+            except Exception as e:                         # noqa: BLE001
+                print(f"  Count -> ошибка: {e}", file=out)
+
     try:
         doc = get_active_document(app)
     except Exception as e:                                 # noqa: BLE001
@@ -118,8 +135,114 @@ def generate_report() -> str:
             continue
         _dump_attrs(f"doc.{attr}", value, out)
 
+    _probe_typed_3d_api(app, doc, out)
+
     print("\n=== Конец отчёта ===", file=out)
     return out.getvalue()
+
+
+def _probe_typed_3d_api(app, doc, out: io.StringIO) -> None:
+    """
+    Пробует ОФИЦИАЛЬНЫЙ путь к геометрии/материалу по документации АСКОН:
+    документ приводится (QueryInterface) к типизированному интерфейсу
+    IKompasDocument3D, у него берётся TopPart (IPart7), а на нём уже есть
+    простые свойства Material/Mass; для Volume/Density/Area нужен ещё один
+    кастинг — к IMassInertiaParam7.
+
+    Это не догадка "в лоб" по именам (как выше), а конкретный документированный
+    путь — https://help.ascon.ru/KOMPAS_SDK/22/ru-RU/ipart7_props.html и
+    https://help.ascon.ru/KOMPAS_SDK/22/ru-RU/imassinertiaparam7_props.html.
+    Каждый шаг обёрнут отдельно, чтобы увидеть, где именно он ломается —
+    без реального запуска на вашей версии КОМПАСа это нельзя проверить иначе.
+    """
+    print("\n--- Попытка типизированного доступа (IKompasDocument3D → TopPart) ---", file=out)
+    try:
+        from win32com.client import gencache, CastTo
+    except Exception as e:                                 # noqa: BLE001
+        print(f"Не удалось импортировать gencache/CastTo: {e}", file=out)
+        return
+
+    # Генерируем typed-обёртку из типобиблиотеки САМОГО уже запущенного
+    # приложения (без запуска нового экземпляра и без угадывания GUID).
+    try:
+        type_info = app._oleobj_.GetTypeInfo()
+        type_lib, _ = type_info.GetContainingTypeLib()
+        lib_attr = type_lib.GetLibAttr()
+        gencache.EnsureModule(lib_attr[0], lib_attr[1], lib_attr[3], lib_attr[4])
+        print("Типобиблиотека КОМПАСа успешно считана и обёрнута (gencache).", file=out)
+    except Exception as e:                                 # noqa: BLE001
+        print(f"Не удалось получить типобиблиотеку приложения: {e}", file=out)
+        return
+
+    try:
+        doc3d = CastTo(doc, "IKompasDocument3D")
+    except Exception as e:                                 # noqa: BLE001
+        print(f"CastTo(doc, 'IKompasDocument3D') -> ошибка: {e}", file=out)
+        return
+    print("doc → IKompasDocument3D: успешно", file=out)
+
+    try:
+        top_part = doc3d.TopPart
+    except Exception as e:                                 # noqa: BLE001
+        print(f"doc3d.TopPart -> ошибка: {e}", file=out)
+        return
+    if top_part is None:
+        print("doc3d.TopPart вернул пусто (None)", file=out)
+        return
+    print("doc3d.TopPart: получен объект", file=out)
+
+    for attr in ("Material", "Mass", "Density", "Marking"):
+        try:
+            value = getattr(top_part, attr)
+            print(f"  TopPart.{attr} = {value}", file=out)
+        except Exception as e:                             # noqa: BLE001
+            print(f"  TopPart.{attr} -> ошибка: {e}", file=out)
+
+    try:
+        mip = CastTo(top_part, "IMassInertiaParam7")
+    except Exception as e:                                 # noqa: BLE001
+        print(f"CastTo(TopPart, 'IMassInertiaParam7') -> ошибка: {e}", file=out)
+        mip = None
+    else:
+        print("TopPart → IMassInertiaParam7: успешно", file=out)
+        for attr in ("Mass", "Volume", "Area", "Density", "Material", "Xc", "Yc", "Zc"):
+            try:
+                value = getattr(mip, attr)
+                print(f"  MassInertiaParam.{attr} = {value}", file=out)
+            except Exception as e:                         # noqa: BLE001
+                print(f"  MassInertiaParam.{attr} -> ошибка: {e}", file=out)
+
+    # Официальная документация АСКОН не даёт прямого свойства "габарит
+    # детали" (bounding box) — значит, угадывать имя вслепую бессмысленно.
+    # Вместо этого печатаем ВСЕ свойства TopPart и IMassInertiaParam7 через
+    # dir() — так реальные имена (Shapes/Bodies/GabaritObj/что угодно ещё)
+    # будут видны прямо в отчёте, без повторного похода к компьютеру.
+    _dump_attrs("TopPart — ВСЕ свойства (dir())", top_part, out)
+    if mip is not None:
+        _dump_attrs("IMassInertiaParam7 — ВСЕ свойства (dir())", mip, out)
+
+    # Если среди свойств TopPart найдётся контейнер тел/геометрии (по
+    # распространённым названиям), заглянем на один уровень внутрь —
+    # это и есть кандидат на габаритные размеры детали.
+    for container_attr in ("Shapes", "Bodies", "Solids", "Model", "Models", "MassInertiaParams"):
+        try:
+            container = getattr(top_part, container_attr)
+        except Exception:                                  # noqa: BLE001
+            continue
+        if container is None:
+            continue
+        _dump_attrs(f"TopPart.{container_attr}", container, out)
+        try:
+            count = len(container)
+        except Exception:                                  # noqa: BLE001
+            count = 0
+        if count:
+            try:
+                first = container[0]
+            except Exception as e:                         # noqa: BLE001
+                print(f"  {container_attr}[0] -> ошибка: {e}", file=out)
+            else:
+                _dump_attrs(f"TopPart.{container_attr}[0]", first, out)
 
 
 def main() -> int:

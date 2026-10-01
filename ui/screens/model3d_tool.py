@@ -8,12 +8,9 @@ from core.settings import load_settings
 from core.step_reader import read_step, density_for_material, StepModel, ocp_available
 from core.m3d_reader import read_m3d, find_m3d_for, M3DInfo
 from core.engine import (
-    STOCKTYPE_TO_GOST,
-    pick_standard_sheet_thickness,
-    pick_round_diameter,
-    mass_str_ru,
     normalize_mark,
     normalize_gost,
+    compute_blank_from_step_model,
 )
 from core import logger
 
@@ -447,105 +444,38 @@ class Model3DToolScreen(ctk.CTkFrame):
         mark = normalize_mark(self.var_mark.get().strip())
         mgost = normalize_gost(self.var_mgost.get().strip())
 
-        st = m.shape_type
-        if st == "?" or not st:
-            self.txt_res.delete("1.0", "end")
-            self.txt_res.insert("1.0",
-                "Тип заготовки не определён по геометрии.\n"
-                f"Габариты: {m.dx:.1f} × {m.dy:.1f} × {m.dz:.1f} мм\n"
-                f"Подсказка: {m.stock_size_hint}\n\n"
-                "Задай тип и размер вручную.")
-            return
-
-        st_key = {"Лист": "ЛистГК"}.get(st, st)
-        gost_stock = STOCKTYPE_TO_GOST.get(st_key, "")
-        L, W, T = m.length_mm, m.width_mm, m.thickness_mm
-        prot = ["Определение заготовки по 3D-модели", f"- Тип по геометрии: {st}"]
-        import math
-
-        if st == "Лист":
-            t_std = pick_standard_sheet_thickness(T)
-            if abs(t_std - T) > 0.1:
-                prot.append(f"- Толщина детали {T:.1f} → стандарт ГОСТ 19903: {t_std} мм")
-            b, l = W + allow, L + allow
-            gost_stock = STOCKTYPE_TO_GOST["ЛистХК" if t_std <= 3 else "ЛистГК"]
-            stock_desc = f"Лист {t_std} {gost_stock}"
-            size_str = f"Лист {t_std}, {l:.0f}х{b:.0f}"
-            vol_blank = t_std * b * l
-
-        elif st == "Круг":
-            D = min(m.dx, m.dy)
-            d_std = pick_round_diameter(D + allow)
-            Lz = m.length_mm + allow
-            stock_desc = f"Круг {d_std} {gost_stock}"
-            size_str = f"Круг {d_std}, L={Lz:.0f}"
-            vol_blank = math.pi * (d_std ** 2) / 4 * Lz
-            if abs(d_std - D) > 0.1:
-                prot.append(f"- Ø детали {D:.1f} → сортамент ГОСТ 2590: {d_std} мм")
-
-        elif st == "Квадрат":
-            a = min(m.dx, m.dy) + allow
-            Lz = m.length_mm + allow
-            stock_desc = f"Квадрат {a:.0f} {gost_stock}"
-            size_str = f"Квадрат {a:.0f}, L={Lz:.0f}"
-            vol_blank = a * a * Lz
-
-        else:
-            # Труба / ТрубаПроф / Профиль — из геометрии
-            hint = m.stock_size_hint
-            head = hint.split(",")[0].strip()
-            size_str = hint.split("(")[0].strip().rstrip(",")
-            stock_desc = f"{head} {gost_stock}".strip()
-            vol_blank = m.blank_volume_mm3
-            if allow and m.length_mm:
-                vol_blank += vol_blank / m.length_mm * allow
-                size_str = re.sub(r"L=(\d+)",
-                                  lambda mm: f"L={int(mm.group(1)) + int(allow)}", size_str)
-            prot.append(f"- Размер из геометрии: {hint}")
-
-        mass_blank = vol_blank / 1e9 * dens
-        mass_part = m.volume_mm3 / 1e9 * dens
-
-        mat_part = f"/ {mark} {mgost}" if (mark and mgost) else (f"/ {mark}" if mark else "")
-        line1 = f"{stock_desc}{(' ' + mat_part) if mat_part else ''};"
-
-        result = (
-            f"{line1}\n"
-            f"{size_str};\n"
-            f"Масса заготовки, кг: {mass_str_ru(mass_blank)}\n"
-            f"Масса чистовая, кг: {mass_str_ru(mass_part)}"
-        )
-
         src = {"full": "STEP (геометрия) + .m3d (материал)",
                "step": "только STEP (материал введён вручную)",
                "m3d": "только .m3d"}[self._mode()]
-        prot += [
-            f"- Источник данных: {src}",
-            f"- Габариты детали: {m.dx:.1f} × {m.dy:.1f} × {m.dz:.1f} мм",
-            f"- Припуск: +{allow:.0f} мм",
-            f"- ГОСТ сортамента: {gost_stock}",
-            f"- Плотность: {dens:.0f} кг/м³" +
-            (" (из .m3d)" if self.m3d_info and self.m3d_info.density else
-             (f" (по марке {mark})" if mark else " (по умолчанию)")),
-            f"- Объём заготовки: {vol_blank/1000:.2f} см³ → масса {mass_blank:.3f} кг",
-            f"- Объём детали: {m.volume_mm3/1000:.2f} см³ → масса чист. {mass_part:.3f} кг",
-        ]
-        if not mark:
-            prot.append("- ⚠ Марка материала не задана: добавьте .m3d или введите вручную")
+
+        calc = compute_blank_from_step_model(m, mark, mgost, dens, allow, src)
+
+        if not calc["ok"]:
+            self.txt_res.delete("1.0", "end")
+            self.txt_res.insert("1.0", calc["message"] + "\n\nЗадай тип и размер вручную.")
+            return
 
         self.txt_res.delete("1.0", "end")
-        self.txt_res.insert("1.0", result)
+        self.txt_res.insert("1.0", calc["result"])
         self.txt_res.yview_moveto(0.0)
+
+        prot_extra = (" (из .m3d)" if self.m3d_info and self.m3d_info.density else
+                      (f" (по марке {mark})" if mark else " (по умолчанию)"))
+        protocol = calc["protocol"].replace(
+            f"- Плотность: {dens:.0f} кг/м³", f"- Плотность: {dens:.0f} кг/м³{prot_extra}")
+        if not mark:
+            protocol += "\n- ⚠ Марка материала не задана: добавьте .m3d или введите вручную"
+
         head_prot = []
         if self.m3d_info:
             head_prot.append(self.m3d_info.protocol)
         head_prot.append(m.protocol)
-        head_prot.append("\n".join(prot))
+        head_prot.append(protocol)
         self.txt_prot.delete("1.0", "end")
         self.txt_prot.insert("1.0", "\n\n".join(head_prot))
         self.txt_prot.yview_moveto(0.0)
         self.btn_copy.configure(state="normal")
-        logger.info(f"3D: заготовка определена — {stock_desc}, {size_str}")
+        logger.info(f"3D: заготовка определена — {calc['stock_desc']}, {calc['size_str']}")
 
     def on_copy(self):
         txt = self.txt_res.get("1.0", "end").strip()

@@ -972,6 +972,119 @@ def mass_str_ru(x: float) -> str:
     return f"{x:.2f}".replace(".", ",")
 
 
+def compute_blank_from_step_model(m, mark: str, mgost: str, dens: float,
+                                   allow: float, source_label: str) -> dict:
+    """
+    Определяет заготовку по уже прочитанной 3D-геометрии (core.step_reader.StepModel)
+    — та же логика, что в ui/screens/model3d_tool.py (вкладка «3D инструмент»),
+    вынесена сюда, чтобы ею же мог пользоваться живой адаптер КОМПАСа
+    (integrations/kompas/adapter.py), не дублируя код.
+
+    m — StepModel (geometry: dx/dy/dz, shape_type, stock_size_hint, volume_mm3,
+        blank_volume_mm3, length_mm и т.д.)
+    mark/mgost — марка и ГОСТ материала (уже нормализованные)
+    dens — плотность, кг/м³
+    allow — припуск, мм
+    source_label — текст для протокола ("STEP", "КОМПАС(live) — геометрия
+        получена экспортом в STEP", и т.п.)
+
+    Возвращает dict: {"ok": bool, "result": str, "protocol": str,
+                       "stock_desc": str, "size_str": str,
+                       "mass_blank_kg": float, "mass_part_kg": float}
+    или {"ok": False, "message": "..."} если тип заготовки не определён.
+    """
+    st = m.shape_type
+    if st == "?" or not st:
+        return {
+            "ok": False,
+            "message": (
+                "Тип заготовки не определён по геометрии.\n"
+                f"Габариты: {m.dx:.1f} × {m.dy:.1f} × {m.dz:.1f} мм\n"
+                f"Подсказка: {m.stock_size_hint}\n\n"
+                "Нужно задать тип и размер вручную."
+            ),
+        }
+
+    st_key = {"Лист": "ЛистГК"}.get(st, st)
+    gost_stock = STOCKTYPE_TO_GOST.get(st_key, "")
+    L, W, T = m.length_mm, m.width_mm, m.thickness_mm
+    prot = ["Определение заготовки по 3D-модели", f"- Тип по геометрии: {st}"]
+
+    if st == "Лист":
+        t_std = pick_standard_sheet_thickness(T)
+        if abs(t_std - T) > 0.1:
+            prot.append(f"- Толщина детали {T:.1f} → стандарт ГОСТ 19903: {t_std} мм")
+        b, l = W + allow, L + allow
+        gost_stock = STOCKTYPE_TO_GOST["ЛистХК" if t_std <= 3 else "ЛистГК"]
+        stock_desc = f"Лист {t_std} {gost_stock}"
+        size_str = f"Лист {t_std}, {l:.0f}х{b:.0f}"
+        vol_blank = t_std * b * l
+
+    elif st == "Круг":
+        D = min(m.dx, m.dy)
+        d_std = pick_round_diameter(D + allow)
+        Lz = m.length_mm + allow
+        stock_desc = f"Круг {d_std} {gost_stock}"
+        size_str = f"Круг {d_std}, L={Lz:.0f}"
+        vol_blank = math.pi * (d_std ** 2) / 4 * Lz
+        if abs(d_std - D) > 0.1:
+            prot.append(f"- Ø детали {D:.1f} → сортамент ГОСТ 2590: {d_std} мм")
+
+    elif st == "Квадрат":
+        a = min(m.dx, m.dy) + allow
+        Lz = m.length_mm + allow
+        stock_desc = f"Квадрат {a:.0f} {gost_stock}"
+        size_str = f"Квадрат {a:.0f}, L={Lz:.0f}"
+        vol_blank = a * a * Lz
+
+    else:
+        hint = m.stock_size_hint
+        head = hint.split(",")[0].strip()
+        size_str = hint.split("(")[0].strip().rstrip(",")
+        stock_desc = f"{head} {gost_stock}".strip()
+        vol_blank = m.blank_volume_mm3
+        if allow and m.length_mm:
+            vol_blank += vol_blank / m.length_mm * allow
+            size_str = re.sub(r"L=(\d+)",
+                              lambda mm: f"L={int(mm.group(1)) + int(allow)}", size_str)
+        prot.append(f"- Размер из геометрии: {hint}")
+
+    mass_blank = vol_blank / 1e9 * dens
+    mass_part = m.volume_mm3 / 1e9 * dens
+
+    mat_part = f"/ {mark} {mgost}" if (mark and mgost) else (f"/ {mark}" if mark else "")
+    line1 = f"{stock_desc}{(' ' + mat_part) if mat_part else ''};"
+
+    result = (
+        f"{line1}\n"
+        f"{size_str};\n"
+        f"Масса заготовки, кг: {mass_str_ru(mass_blank)}\n"
+        f"Масса чистовая, кг: {mass_str_ru(mass_part)}"
+    )
+
+    prot += [
+        f"- Источник данных: {source_label}",
+        f"- Габариты детали: {m.dx:.1f} × {m.dy:.1f} × {m.dz:.1f} мм",
+        f"- Припуск: +{allow:.0f} мм",
+        f"- ГОСТ сортамента: {gost_stock}",
+        f"- Плотность: {dens:.0f} кг/м³",
+        f"- Объём заготовки: {vol_blank/1000:.2f} см³ → масса {mass_blank:.3f} кг",
+        f"- Объём детали: {m.volume_mm3/1000:.2f} см³ → масса чист. {mass_part:.3f} кг",
+    ]
+    if not mark:
+        prot.append("- ⚠ Марка материала не задана")
+
+    return {
+        "ok": True,
+        "result": result,
+        "protocol": "\n".join(prot),
+        "stock_desc": stock_desc,
+        "size_str": size_str,
+        "mass_blank_kg": round(mass_blank, 3),
+        "mass_part_kg": round(mass_part, 3),
+    }
+
+
 def build_result_block_bar(stock_desc: str, l_blank: float, mass_kg: float) -> str:
     return (
         f"{stock_desc};\n"
