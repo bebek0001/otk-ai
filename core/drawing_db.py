@@ -38,8 +38,35 @@ from core import logger
 
 
 from core.paths import DB_PATH as USER_DB_PATH
+from core.paths import SEED_DB_PATH
 
 DB_PATH = str(USER_DB_PATH)
+
+
+def _install_seed() -> None:
+    """
+    Если у пользователя ещё нет своей базы чертежей — копирует туда
+    эталонную базу (seed/drawing_db.json), которая едет вместе с
+    установщиком/исходниками. Никогда не трогает уже существующую
+    пользовательскую базу — только разовая установка "из коробки".
+    """
+    if os.path.exists(DB_PATH):
+        return
+    try:
+        if not SEED_DB_PATH.exists():
+            return
+        with open(SEED_DB_PATH, "r", encoding="utf-8") as f:
+            seed_data = json.load(f)
+        if not isinstance(seed_data, list):
+            return
+        with open(DB_PATH, "w", encoding="utf-8") as f:
+            json.dump(seed_data, f, ensure_ascii=False, indent=2)
+        logger.info(
+            f"Установлена эталонная база из комплекта поставки: "
+            f"{len(seed_data)} записей → {DB_PATH}"
+        )
+    except Exception as e:
+        logger.warn(f"Не удалось установить эталонную базу из комплекта поставки: {e}")
 
 
 # ============================================================
@@ -82,6 +109,7 @@ def _extract_drawing_no(pdf_text: str, part_name: str) -> str:
 # ============================================================
 
 def load_db() -> List[Dict[str, Any]]:
+    _install_seed()
     if not os.path.exists(DB_PATH):
         return []
     try:

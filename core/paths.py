@@ -48,6 +48,11 @@ SETTINGS_PATH = USER_DATA_DIR / "settings.json"
 
 DB_PATH = USER_DATA_DIR / "drawing_db.json"
 
+# Эталонная база, которая едет вместе с установщиком/исходниками.
+# При первом запуске, если у пользователя ещё нет своей базы, она
+# копируется в DB_PATH — см. core.drawing_db._install_seed().
+SEED_DB_PATH = PROJECT_ROOT / "seed" / "drawing_db.json"
+
 EMBEDDINGS_CACHE_PATH = (
     USER_DATA_DIR / "embeddings_cache.json"
 )
