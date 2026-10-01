@@ -3,15 +3,13 @@ BATCH_TOOL.PY — Пакетная обработка чертежей (PDF и �
 
 Режимы:
   1. Список файлов — выбрать чертежи вручную.
-  2. Папки 1/2/3   — как просил заказчик:
-       Папка 1 — вход (все .cdw и .pdf)
-       Папка 2 — куда сохранить таблицу
-       Папка 3 — куда перенести обработанные файлы
+  2. Режим папки:
+       Папка 1 — исходные чертежи (.cdw и .pdf), без изменения файлов
+       Папка 2 — Excel-таблица и протокол обработки
 """
 
 import os
 import re
-import shutil
 import threading
 import datetime
 import customtkinter as ctk
@@ -521,23 +519,6 @@ def scan_folder(folder: str) -> list:
     return [str(p) for p in sorted(by_stem.values())]
 
 
-def move_to_folder(src: str, dst_folder: str) -> str:
-    """
-    Перенести файл, не перезаписывая существующий: при совпадении
-    имени добавляем суффикс _1, _2 и т.д.
-    """
-    os.makedirs(dst_folder, exist_ok=True)
-    base = os.path.basename(src)
-    stem, ext = os.path.splitext(base)
-    target = os.path.join(dst_folder, base)
-    i = 1
-    while os.path.exists(target):
-        target = os.path.join(dst_folder, f"{stem}_{i}{ext}")
-        i += 1
-    shutil.move(src, target)
-    return target
-
-
 # ============================================================
 # Экспорт в Excel
 # ============================================================
@@ -787,7 +768,6 @@ class BatchToolScreen(ctk.CTkFrame):
 
         self._folder_in   = ctk.StringVar(value="")
         self._folder_out  = ctk.StringVar(value="")
-        self._folder_done = ctk.StringVar(value="")
 
         self._build_ui()
         self._load_folders()
@@ -862,15 +842,14 @@ class BatchToolScreen(ctk.CTkFrame):
                      ).grid(row=0, column=0, columnspan=3, padx=16, pady=(12, 2), sticky="w")
 
         ctk.CTkLabel(ff,
-                     text="Берём все чертежи из Папки 1, таблицу кладём в Папку 2, "
-                          "обработанные файлы переносим в Папку 3.",
+                     text="Читаем чертежи из Папки 1, сохраняем таблицу и протокол в Папку 2. "
+                          "Оригиналы остаются без изменений.",
                      font=ctk.CTkFont(size=11), text_color=("gray40", "#888888")
                      ).grid(row=1, column=0, columnspan=3, padx=16, pady=(0, 8), sticky="w")
 
         rows = [
             ("Папка 1 — чертежи на вход",  self._folder_in),
             ("Папка 2 — куда таблицу",     self._folder_out),
-            ("Папка 3 — куда обработанные", self._folder_done),
         ]
         for i, (label, var) in enumerate(rows):
             r = i + 2
@@ -889,7 +868,7 @@ class BatchToolScreen(ctk.CTkFrame):
             ff, text="Обработать папку", height=34, corner_radius=10, width=180,
             fg_color="#2563eb", hover_color="#1d4ed8", text_color="white",
             command=self.on_run_folder)
-        self.btn_folder_run.grid(row=5, column=0, columnspan=3, padx=16, pady=(8, 14), sticky="w")
+        self.btn_folder_run.grid(row=4, column=0, columnspan=3, padx=16, pady=(8, 14), sticky="w")
 
         # ---------- Прогресс ----------
         pf = ctk.CTkFrame(self, corner_radius=12,
@@ -954,7 +933,6 @@ class BatchToolScreen(ctk.CTkFrame):
             s = load_settings()
             self._folder_in.set(s.get("folder_in", "") or "")
             self._folder_out.set(s.get("folder_out", "") or s.get("export_folder", "") or "")
-            self._folder_done.set(s.get("folder_done", "") or "")
         except Exception:
             pass
 
@@ -964,7 +942,6 @@ class BatchToolScreen(ctk.CTkFrame):
             s = load_settings()
             s["folder_in"]   = self._folder_in.get()
             s["folder_out"]  = self._folder_out.get()
-            s["folder_done"] = self._folder_done.get()
             save_settings(s)
         except Exception as e:
             logger.warn(f"Не удалось сохранить пути папок: {e}")
@@ -1038,19 +1015,12 @@ class BatchToolScreen(ctk.CTkFrame):
             return
         f_in   = self._folder_in.get().strip()
         f_out  = self._folder_out.get().strip()
-        f_done = self._folder_done.get().strip()
 
         if not f_in or not os.path.isdir(f_in):
             messagebox.showwarning("Папка 1", "Укажите существующую папку с чертежами.")
             return
         if not f_out or not os.path.isdir(f_out):
             messagebox.showwarning("Папка 2", "Укажите существующую папку для таблицы.")
-            return
-        if not f_done:
-            messagebox.showwarning("Папка 3", "Укажите папку для обработанных файлов.")
-            return
-        if os.path.abspath(f_done) == os.path.abspath(f_in):
-            messagebox.showwarning("Папка 3", "Папка 3 не должна совпадать с Папкой 1.")
             return
 
         files = scan_folder(f_in)
@@ -1061,8 +1031,8 @@ class BatchToolScreen(ctk.CTkFrame):
         if not messagebox.askyesno(
                 "Обработать папку",
                 f"Найдено чертежей: {len(files)}\n\n"
-                f"Таблица будет сохранена в:\n{f_out}\n\n"
-                f"Файлы будут перенесены в:\n{f_done}\n\nПродолжить?"):
+                f"Таблица и протокол будут сохранены в:\n{f_out}\n\n"
+                "Исходные .cdw и PDF останутся на своих местах.\n\nПродолжить?"):
             return
 
         self._save_folders()
@@ -1082,7 +1052,6 @@ class BatchToolScreen(ctk.CTkFrame):
 
         use_ai = self._use_ai.get()
         f_out  = self._folder_out.get().strip()
-        f_done = self._folder_done.get().strip()
         f_in   = self._folder_in.get().strip()
 
         def worker():
@@ -1094,12 +1063,12 @@ class BatchToolScreen(ctk.CTkFrame):
                 self._results.append(process_one_file(path, use_ai=use_ai))
 
             saved_path = ""
-            move_report = ""
+            save_report = ""
             if folder_mode:
                 try:
-                    saved_path, move_report = self._finalize_folder(f_out, f_done, f_in)
+                    saved_path, save_report = self._finalize_folder(f_out, f_in)
                 except Exception as e:
-                    move_report = f"ОШИБКА сохранения: {e}"
+                    save_report = f"ОШИБКА сохранения: {e}"
                     logger.error(f"Режим папки: {e}")
 
             def finish():
@@ -1111,8 +1080,8 @@ class BatchToolScreen(ctk.CTkFrame):
                 ok  = sum(1 for r in self._results if r["status"] == "ОК")
                 err = len(self._results) - ok
                 txt = f"Готово: {ok} успешно, {err} с замечаниями | Всего: {len(self._results)}"
-                if move_report:
-                    txt += f" | {move_report}"
+                if save_report:
+                    txt += f" | {save_report}"
                 self.lbl_status.configure(text=txt)
                 self.btn_run.configure(state="normal", text="Запустить обработку")
                 self.btn_add.configure(state="normal")
@@ -1124,47 +1093,28 @@ class BatchToolScreen(ctk.CTkFrame):
                 if folder_mode and saved_path:
                     messagebox.showinfo(
                         "Папка обработана",
-                        f"Таблица сохранена:\n{saved_path}\n\n{move_report}")
+                        f"Таблица сохранена:\n{saved_path}\n\n{save_report}")
 
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finalize_folder(self, f_out: str, f_done: str, f_in: str):
-        """
-        Сохраняем таблицу и протокол в Папку 2, затем переносим файлы в Папку 3.
-        Перенос делается ТОЛЬКО после успешной записи таблицы — иначе при сбое
-        файлы уедут в архив, а результата не будет.
-        """
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        xlsx  = os.path.join(f_out, f"OTK_заготовки_{stamp}.xlsx")
+    def _finalize_folder(self, f_out: str, f_in: str):
+        """Сохраняет Excel и протокол. Исходные чертежи не изменяются."""
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        xlsx = os.path.join(f_out, f"OTK_заготовки_{stamp}.xlsx")
+        log_path = os.path.join(f_out, f"OTK_протокол_{stamp}.txt")
+
+        # Исключаем перезапись файлов отчёта при повторной обработке.
+        suffix = 1
+        while os.path.exists(xlsx) or os.path.exists(log_path):
+            xlsx = os.path.join(f_out, f"OTK_заготовки_{stamp}_{suffix}.xlsx")
+            log_path = os.path.join(f_out, f"OTK_протокол_{stamp}_{suffix}.txt")
+            suffix += 1
+
         export_to_excel(self._results, xlsx)
-        write_run_log(self._results, os.path.join(f_out, f"OTK_протокол_{stamp}.txt"), f_in)
-
-        os.makedirs(f_done, exist_ok=True)
-        err_dir = os.path.join(f_done, "Ошибки")
-        moved = failed = locked = 0
-        for r in self._results:
-            src = r.get("path", "")
-            if not src or not os.path.exists(src):
-                continue
-            dst = f_done if r["status"] == "ОК" else err_dir
-            try:
-                move_to_folder(src, dst)
-                if r["status"] == "ОК":
-                    moved += 1
-                else:
-                    failed += 1
-            except (OSError, PermissionError) as e:
-                locked += 1
-                logger.warn(f"Не удалось перенести {os.path.basename(src)}: {e}")
-
-        report = f"перенесено {moved}"
-        if failed:
-            report += f", в «Ошибки» {failed}"
-        if locked:
-            report += f", занято другой программой {locked}"
-        return xlsx, report
+        write_run_log(self._results, log_path, f_in)
+        return xlsx, "Исходные чертежи сохранены без изменений"
 
     # ---------- строка таблицы ----------
 

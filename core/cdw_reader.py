@@ -15,6 +15,7 @@ cdw_reader.py — чтение чертежей КОМПАС-3D (.cdw / .frw / .
 
 from __future__ import annotations
 
+import os
 import re
 import zipfile
 import zlib
@@ -126,6 +127,24 @@ def _kompas_version(z: zipfile.ZipFile) -> str:
     return m.group(1).strip() if m else ""
 
 
+# Параметрические детали из библиотеки КОМПАС (прокат/профили) иногда
+# хранят в material.name и в имени .frw-ссылки нерасшифрованный токен
+# переменной вида '$d80' (переменная 'd' = 80), который в самом КОМПАСе
+# подставляется числом только при открытии/регенерации спецификации.
+# Наш структурный разбор такие переменные не резолвит, поэтому здесь
+# отдельно вставляем число на место токена и убираем висячие '$'.
+_TEMPLATE_VAR_RE = re.compile(r"\$([A-Za-zА-Яа-я]{0,3})(\d+(?:[.,]\d+)?)")
+
+
+def _clean_kompas_text(s: str) -> str:
+    if not s:
+        return s
+    s = _TEMPLATE_VAR_RE.sub(lambda m: " " + m.group(2), s)
+    s = s.replace("$", "")
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s
+
+
 def _library_refs(meta_xml: str) -> list[str]:
     """
     Ссылки на библиотечные макро (.frw/.kle). Для деталей из проката
@@ -134,7 +153,8 @@ def _library_refs(meta_xml: str) -> list[str]:
     refs = []
     for val in re.findall(r'id="fullFileName"\s+value="([^"]*)"', meta_xml):
         if val.lower().endswith((".frw", ".kle")):
-            refs.append(val.replace("\\", "/").rsplit("/", 1)[-1])
+            name = val.replace("\\", "/").rsplit("/", 1)[-1]
+            refs.append(_clean_kompas_text(os.path.splitext(name)[0]) + os.path.splitext(name)[1])
     return list(dict.fromkeys(refs))
 
 
@@ -305,7 +325,7 @@ def read_cdw(path: str | Path) -> dict[str, Any]:
             flat = _flatten(doc)
             res["marking"] = _assemble_marking(flat)
             res["name"] = flat.get("name", "").strip()
-            res["material"] = flat.get("material.name", "").strip()
+            res["material"] = _clean_kompas_text(flat.get("material.name", "").strip())
             res["author"] = flat.get("author", "").strip()
             res["format"] = flat.get("format", "").strip()
             res["revision"] = flat.get("revisionLetter", "").strip()
