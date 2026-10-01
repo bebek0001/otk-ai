@@ -1,4 +1,3 @@
-
 name: Build OTK AI for Windows
 
 on:
@@ -7,6 +6,22 @@ on:
 jobs:
   build:
     runs-on: windows-2022
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: standard
+            requirements: requirements-windows.txt
+            iss_file: installer.iss
+            exe_name: OTK_AI_Setup.exe
+            artifact_name: OTK-AI-Windows-Installer
+
+          - variant: legacy
+            requirements: requirements-windows-legacy.txt
+            iss_file: installer-legacy.iss
+            exe_name: OTK_AI_Setup_LegacyCPU.exe
+            artifact_name: OTK-AI-Windows-Installer-LegacyCPU
 
     steps:
       - name: Download project
@@ -22,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-windows.txt
+          pip install -r ${{ matrix.requirements }}
           pip install pyinstaller
 
       - name: Build executable
@@ -47,7 +62,7 @@ jobs:
             throw "Inno Setup compiler not found"
           }
 
-          & $iscc installer.iss
+          & $iscc "${{ matrix.iss_file }}"
 
           if ($LASTEXITCODE -ne 0) {
             throw "Installer compilation failed"
@@ -56,6 +71,6 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: OTK-AI-Windows-Installer
-          path: installer/OTK_AI_Setup.exe
+          name: ${{ matrix.artifact_name }}
+          path: installer/${{ matrix.exe_name }}
           if-no-files-found: error
