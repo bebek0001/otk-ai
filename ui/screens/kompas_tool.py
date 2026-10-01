@@ -20,6 +20,7 @@ import threading
 import customtkinter as ctk
 
 from integrations.kompas.connector import connect, is_available, ConnectionStatus
+from integrations.kompas.probe import generate_report
 from core import logger
 
 
@@ -55,7 +56,13 @@ class KompasToolScreen(ctk.CTkFrame):
             top, text="Подключиться / обновить", height=36, corner_radius=12,
             fg_color=("gray88", "gray25"), hover_color=("gray80", "gray30"),
             text_color=("gray10", "gray90"), command=self.on_refresh,
-        ).grid(row=0, column=2, padx=16, pady=12)
+        ).grid(row=0, column=2, padx=(16, 8), pady=12)
+
+        self._probe_btn = ctk.CTkButton(
+            top, text="Считать диагностику", height=36, corner_radius=12,
+            command=self.on_probe,
+        )
+        self._probe_btn.grid(row=0, column=3, padx=(0, 16), pady=12)
 
         card = ctk.CTkFrame(
             self, corner_radius=12, fg_color=("gray92", "#141416"),
@@ -75,9 +82,11 @@ class KompasToolScreen(ctk.CTkFrame):
         self._set_output(
             "Эта вкладка подключается к уже открытому КОМПАС-3D (v22 или v25) "
             "и читает его активный документ напрямую — без экспорта файлов.\n\n"
-            "Пока доступна только диагностика подключения. Чтение геометрии "
-            "и материалов добавится следующим шагом, когда будет откалиброван "
-            "адаптер под вашу версию КОМПАСа (integrations/kompas/probe.py)."
+            "Пока доступно только чтение диагностики. Нажмите «Считать "
+            "диагностику», когда в КОМПАСе открыта деталь или сборка — здесь "
+            "появится полный отчёт о том, что приложение видит в модели. Этот "
+            "отчёт нужно будет прислать для настройки чтения геометрии и "
+            "материалов под вашу версию КОМПАСа."
         )
 
     def _set_output(self, text: str):
@@ -88,6 +97,23 @@ class KompasToolScreen(ctk.CTkFrame):
 
     def on_refresh(self):
         threading.Thread(target=self._refresh_worker, daemon=True).start()
+
+    def on_probe(self):
+        self._probe_btn.configure(state="disabled", text="Считаю…")
+        self._set_output("Считываю диагностику… подождите несколько секунд.")
+        threading.Thread(target=self._probe_worker, daemon=True).start()
+
+    def _probe_worker(self):
+        try:
+            report = generate_report()
+        except Exception as e:                             # noqa: BLE001
+            report = f"Не удалось получить диагностику: {e}"
+        self.after(0, self._apply_probe_result, report)
+
+    def _apply_probe_result(self, report: str):
+        self._probe_btn.configure(state="normal", text="Считать диагностику")
+        self._set_output(report)
+        logger.info("Диагностика КОМПАС считана и показана на вкладке")
 
     def _refresh_worker(self):
         status = connect() if is_available() else ConnectionStatus(
