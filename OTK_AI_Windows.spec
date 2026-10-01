@@ -8,6 +8,7 @@ project_dir = Path(SPECPATH)
 
 datas = [
     (str(project_dir / "gosts"), "gosts"),
+    (str(project_dir / "seed"), "seed"),
 ]
 
 binaries = []
