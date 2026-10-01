@@ -57,4 +57,9 @@ EMBEDDINGS_CACHE_PATH = (
     USER_DATA_DIR / "embeddings_cache.json"
 )
 
+# Журнал обработки: по одному файлу в день, в каждом — построчно JSON
+# с тем, какой чертёж обрабатывался, что из него было прочитано и чем
+# закончилась обработка. См. core.activity_log.
+PROCESSING_LOG_DIR = USER_DATA_DIR / "processing_log"
+
 GOSTS_DIR = PROJECT_ROOT / "gosts"

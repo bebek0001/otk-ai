@@ -30,6 +30,7 @@ from core import drawing_db
 from core.drawing_db import build_etalon_examples_block, lookup_etalon
 from core.gost_reader import get_gost_context_for_query
 from core import logger
+from core import activity_log
 
 
 # ============================================================
@@ -206,6 +207,7 @@ def process_one_pdf(pdf_path: str) -> dict:
 
     try:
         ex = extract_from_pdf(pdf_path, max_pages=3)
+        result["_raw_text"] = getattr(ex, "pdf_text", "") or ""
         raw_name = ex.part_name or name.replace(".pdf", "")
         # Убираем префикс из имени: "23_14_02_004_Тяга" → "Тяга"
         m_clean = re.match(r'^[\d_]+([А-ЯЁа-яёA-Za-z].*)', raw_name)
@@ -311,6 +313,7 @@ def process_one_cdw(cdw_path: str) -> dict:
 
     try:
         ex   = cdw_bridge.extract_from_cdw(cdw_path)
+        result["_raw_text"] = getattr(ex, "pdf_text", "") or ""
         card = getattr(ex, "cdw_card", {}) or {}
 
         result["drawing_no"]    = card.get("marking", "")
@@ -493,9 +496,24 @@ def _apply_ai(result: dict, ex, text_block: str, fname: str) -> None:
 
 def process_one_file(path: str, use_ai: bool = False) -> dict:
     """Единая точка входа: .cdw читаем структурно, остальное — через PDF."""
-    if cdw_bridge.is_cdw(path):
-        return process_one_cdw_with_ai(path) if use_ai else process_one_cdw(path)
-    return process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
+    is_cdw = cdw_bridge.is_cdw(path)
+    if is_cdw:
+        result = process_one_cdw_with_ai(path) if use_ai else process_one_cdw(path)
+    else:
+        result = process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
+
+    raw_text = result.pop("_raw_text", "")
+    activity_log.log_processing(
+        source_path=path,
+        mode="batch",
+        status=result.get("status", ""),
+        source_kind="cdw" if is_cdw else "pdf",
+        message=result.get("error", ""),
+        used_ai=use_ai,
+        result=result,
+        raw_text=raw_text,
+    )
+    return result
 
 
 SUPPORTED_PATTERNS = ("*.cdw", "*.CDW", "*.pdf", "*.PDF")
