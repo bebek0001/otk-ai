@@ -511,6 +511,11 @@ def scan_folder(folder: str) -> list:
     for pat in SUPPORTED_PATTERNS:
         found.extend(Path(folder).glob(pat))
 
+    # Пропускаем служебные файлы-спутники macOS (AppleDouble, "._имя.cdw"),
+    # которые появляются при копировании с Mac на флешку/сетевой диск —
+    # это не чертежи, а метаданные, и чтение их как ZIP всегда падает.
+    found = [f for f in found if not f.name.startswith("._")]
+
     by_stem = {}
     for f in sorted(found):
         prev = by_stem.get(f.stem)
