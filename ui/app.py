@@ -5,6 +5,7 @@ from ui.screens.settings_screen import SettingsScreen
 from ui.screens.model3d_tool import Model3DToolScreen
 from ui.screens.ai_assistant import AIAssistantScreen
 from ui.screens.batch_tool import BatchToolScreen
+from ui.screens.kompas_tool import KompasToolScreen
 from core import logger
 
 
@@ -122,6 +123,7 @@ class Sidebar(ctk.CTkFrame):
             ("3D инструмент",   "model3d"),
             ("ИИ Ассистент",    "ai_assistant"),
             ("Пакетная обработка", "batch"),
+            ("КОМПАС",          "kompas"),
             ("Настройки",       "settings"),
         ]
 
@@ -213,6 +215,8 @@ class App(ctk.CTk):
             self.current = AIAssistantScreen(self.content)
         elif key == "batch":
             self.current = BatchToolScreen(self.content)
+        elif key == "kompas":
+            self.current = KompasToolScreen(self.content)
         elif key == "settings":
             self.current = SettingsScreen(self.content)
         else:
