@@ -1,11 +1,16 @@
 """
-BATCH_TOOL.PY — Пакетная обработка чертежей (PDF и КОМПАС .cdw)
+BATCH_TOOL.PY — Пакетная обработка чертежей (PDF, КОМПАС .cdw, КОМПАС .m3d/.a3d)
 
 Режимы:
   1. Список файлов — выбрать чертежи вручную.
   2. Режим папки:
-       Папка 1 — исходные чертежи (.cdw и .pdf), без изменения файлов
+       Папка 1 — исходные чертежи и модели (.cdw, .pdf, .m3d/.a3d), без изменения файлов
        Папка 2 — Excel-таблица и протокол обработки
+
+.m3d/.a3d даёт только паспортные данные (обозначение, материал, масса) —
+геометрия в этом формате закрыта (C3D), поэтому заготовка определяется
+только если деталь уже есть в базе эталонов по обозначению. Полный расчёт
+по 3D-геометрии — через вкладку «3D инструмент» (STEP) или живой КОМПАС.
 """
 
 import os
@@ -403,6 +408,80 @@ def process_one_cdw(cdw_path: str) -> dict:
 
 
 # ============================================================
+# Обработка одного .m3d/.a3d (КОМПАС, модель)
+# ============================================================
+#
+# В .m3d геометрия закрыта (формат C3D) — ни длины, ни диаметра оттуда не
+# получить без КОМПАСа/экспорта в STEP (см. ui/screens/model3d_tool.py и
+# integrations/kompas/adapter.py). Здесь — то же самое честное поведение,
+# что и в живом КОМПАС-адаптере: если деталь нашлась в базе эталонов по
+# обозначению — отдаём полный результат как для CDW; если нет — отдаём то,
+# что реально прочитано (материал, масса), и пишем прямым текстом, что
+# заготовка не определена, а не подставляем случайное число.
+
+def process_one_m3d(m3d_path: str) -> dict:
+    from core.m3d_reader import read_m3d
+
+    name = os.path.basename(m3d_path)
+    result = _blank_result(m3d_path)
+
+    try:
+        info = read_m3d(m3d_path)
+        if info is None:
+            result["status"] = "❌ ошибка"
+            result["error"]  = "Не удалось прочитать .m3d (не ZIP-контейнер КОМПАС, либо нет свойств детали)"
+            return result
+
+        result["_raw_text"]     = info.protocol
+        result["drawing_no"]    = info.drawing_no
+        result["part_name"]     = info.part_name or os.path.splitext(name)[0]
+        result["material"]      = info.material
+        result["clean_mass_kg"] = _fmt_mass_ru(info.mass_kg)
+
+        etalon = None
+        marking = (info.drawing_no or "").strip()
+        if marking:
+            finder = getattr(drawing_db, "lookup_by_drawing_no", None)
+            if finder:
+                try:
+                    etalon = finder(marking)
+                except Exception as e:                       # noqa: BLE001
+                    logger.warn(f"Поиск эталона по обозначению не удался: {e}")
+
+        if etalon:
+            db_name = etalon.get("part_name", "")
+            if db_name and not result["part_name"]:
+                result["part_name"] = db_name
+            new_sortament, stock_size, stock_mass = parse_result_line(
+                etalon.get("result_line", "")
+            )
+            result["new_sortament"]  = new_sortament
+            result["stock_size"]     = stock_size
+            result["stock_mass_kg"]  = stock_mass
+            result["zagotovka_full"] = new_sortament
+            result["source"]         = "M3D+база"
+            return result
+
+        # Не нашлось в базе — геометрии в .m3d нет, заготовку определить
+        # нечем. Это не ошибка чтения, а честная граница формата.
+        result["status"] = "⚠ нет геометрии"
+        result["error"]  = (
+            "В .m3d нет геометрии (формат C3D закрыт) — заготовка не "
+            "определена. Материал и масса прочитаны верно. Для полного "
+            "расчёта нужен STEP этой же детали (вкладка «3D инструмент») "
+            "или деталь должна быть в базе эталонов по обозначению."
+        )
+        result["source"] = "M3D"
+
+    except Exception as e:
+        result["status"] = "❌ ошибка"
+        result["error"]  = str(e)[:120]
+        logger.error(f"Пакетная обработка M3D: ошибка {name}: {e}")
+
+    return result
+
+
+# ============================================================
 # ИИ-добор для сложных случаев
 # ============================================================
 
@@ -494,11 +573,25 @@ def _apply_ai(result: dict, ex, text_block: str, fname: str) -> None:
 # Диспетчер
 # ============================================================
 
+def _source_kind(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".cdw":
+        return "cdw"
+    if ext in (".m3d", ".a3d"):
+        return "m3d"
+    return "pdf"
+
+
 def process_one_file(path: str, use_ai: bool = False) -> dict:
-    """Единая точка входа: .cdw читаем структурно, остальное — через PDF."""
-    is_cdw = cdw_bridge.is_cdw(path)
-    if is_cdw:
+    """Единая точка входа: .cdw читаем структурно, .m3d — свойства без
+    геометрии, остальное — через PDF."""
+    kind = _source_kind(path)
+    if kind == "cdw":
         result = process_one_cdw_with_ai(path) if use_ai else process_one_cdw(path)
+    elif kind == "m3d":
+        # У .m3d нет ИИ-добора: там нет ни текста чертежа, ни картинки,
+        # чтобы модели было на чём угадывать — только структурные свойства.
+        result = process_one_m3d(path)
     else:
         result = process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
 
@@ -507,7 +600,7 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
         source_path=path,
         mode="batch",
         status=result.get("status", ""),
-        source_kind="cdw" if is_cdw else "pdf",
+        source_kind=kind,
         message=result.get("error", ""),
         used_ai=use_ai,
         result=result,
@@ -516,13 +609,20 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
     return result
 
 
-SUPPORTED_PATTERNS = ("*.cdw", "*.CDW", "*.pdf", "*.PDF")
+SUPPORTED_PATTERNS = ("*.cdw", "*.CDW", "*.pdf", "*.PDF", "*.m3d", "*.M3D", "*.a3d", "*.A3D")
+
+# Приоритет, если на одну деталь в папке лежит несколько форматов:
+# .cdw читается точно и структурно (обозначение/материал/масса из файла,
+# плюс размеры чертежа) — предпочитаем его всегда. .pdf — следующий
+# (распознаётся текстом/ИИ, но хотя бы может нести готовый штамп).
+# .m3d — последний: даёт только материал и массу, геометрии там нет.
+_FORMAT_PRIORITY = {".cdw": 0, ".pdf": 1, ".m3d": 2, ".a3d": 2}
 
 
 def scan_folder(folder: str) -> list:
     """
-    Все чертежи в папке. Если на одну деталь есть и .cdw, и .pdf —
-    берём .cdw: из него данные читаются точно, а не распознаются.
+    Все чертежи/модели в папке. Если на одну деталь есть несколько
+    форматов — берём наиболее точный (см. _FORMAT_PRIORITY).
     """
     from pathlib import Path
     found = []
@@ -537,7 +637,8 @@ def scan_folder(folder: str) -> list:
     by_stem = {}
     for f in sorted(found):
         prev = by_stem.get(f.stem)
-        if prev is None or f.suffix.lower() == ".cdw":
+        if prev is None or _FORMAT_PRIORITY.get(f.suffix.lower(), 9) < \
+                _FORMAT_PRIORITY.get(prev.suffix.lower(), 9):
             by_stem[f.stem] = f
     return [str(p) for p in sorted(by_stem.values())]
 
@@ -810,8 +911,10 @@ class BatchToolScreen(ctk.CTkFrame):
                      ).grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
 
         ctk.CTkLabel(top,
-                     text="Поддерживаются .cdw (КОМПАС) и .pdf. "
-                          "Из .cdw обозначение, материал и масса читаются точно, без распознавания.",
+                     text="Поддерживаются .cdw (КОМПАС), .pdf и .m3d/.a3d (КОМПАС, модель). "
+                          "Из .cdw и .m3d обозначение, материал и масса читаются точно, без "
+                          "распознавания. У .m3d нет геометрии — заготовка определится, только "
+                          "если деталь уже есть в базе эталонов.",
                      font=ctk.CTkFont(size=12), text_color=("gray40", "#888888")
                      ).grid(row=1, column=0, columnspan=3, padx=16, pady=(0, 14), sticky="w")
 
@@ -979,7 +1082,7 @@ class BatchToolScreen(ctk.CTkFrame):
 
     def _show_empty_hint(self):
         ctk.CTkLabel(self.scroll,
-                     text="Добавьте чертежи (.cdw или .pdf) либо укажите Папку 1 и нажмите «Обработать папку»",
+                     text="Добавьте чертежи (.cdw, .pdf, .m3d/.a3d) либо укажите Папку 1 и нажмите «Обработать папку»",
                      font=ctk.CTkFont(size=13), text_color=("gray60", "gray50")
                      ).grid(row=0, column=0, columnspan=10, pady=40)
 
@@ -990,9 +1093,10 @@ class BatchToolScreen(ctk.CTkFrame):
     def on_add_files(self):
         paths = filedialog.askopenfilenames(
             title="Выберите чертежи",
-            filetypes=[("Чертежи КОМПАС и PDF", "*.cdw *.pdf"),
-                       ("КОМПАС", "*.cdw"),
-                       ("PDF", "*.pdf")])
+            filetypes=[("Чертежи КОМПАС, PDF и модели КОМПАС", "*.cdw *.pdf *.m3d *.a3d"),
+                       ("КОМПАС чертёж", "*.cdw"),
+                       ("PDF", "*.pdf"),
+                       ("КОМПАС модель", "*.m3d *.a3d")])
         if not paths:
             return
         added = 0
@@ -1048,14 +1152,14 @@ class BatchToolScreen(ctk.CTkFrame):
 
         files = scan_folder(f_in)
         if not files:
-            messagebox.showinfo("Пусто", f"В папке нет .cdw и .pdf файлов:\n{f_in}")
+            messagebox.showinfo("Пусто", f"В папке нет .cdw, .pdf или .m3d/.a3d файлов:\n{f_in}")
             return
 
         if not messagebox.askyesno(
                 "Обработать папку",
                 f"Найдено чертежей: {len(files)}\n\n"
                 f"Таблица и протокол будут сохранены в:\n{f_out}\n\n"
-                "Исходные .cdw и PDF останутся на своих местах.\n\nПродолжить?"):
+                "Исходные .cdw, .pdf и .m3d останутся на своих местах.\n\nПродолжить?"):
             return
 
         self._save_folders()
