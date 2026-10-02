@@ -137,19 +137,50 @@ MIN_LENGTH_MM = 10.0
 MAX_LENGTH_MM = 12000.0
 
 
-def guess_length_mm(geom: dict) -> Optional[float]:
+def guess_length_mm(geom: dict, looks_rotational: bool = False) -> Optional[float]:
     """
     Длина детали — наибольшая параметрическая переменная чертежа.
 
     Возвращает значение ТОЛЬКО для чертежей, которые конструктор вёл
     параметрически. Иначе None — и вызывающий код честно сообщит,
     что длина не определена, вместо того чтобы подставить случайное число.
+
+    ИСКЛЮЧЕНИЕ для тел вращения с РОВНО двумя переменными (вал/штырь/ось,
+    где конструктор проставил только Ø и длину, больше ничего).
+    Порог MIN_PARAM_VARS=5 придуман против чертежей с 1–4 ПОСТОРОННИМИ
+    переменными (фаска, резьба, диаметр отверстия), среди которых максимум
+    случаен. Но когда переменных ровно две и деталь по имени — тело
+    вращения, других кандидатов просто нет: это Ø и длина, и большее
+    значение почти всегда длина (на реальных файлах — «Штырь» 290426.00.00.001:
+    48 и 55.426 → 55.426 действительно длина). Подтверждено на реальных
+    чертежах клиента, не угадано.
     """
     dims = [float(d) for d in (geom.get("dimensions") or []) if d]
     dims = [d for d in dims if MIN_LENGTH_MM <= d <= MAX_LENGTH_MM]
-    if len(dims) < MIN_PARAM_VARS:
-        return None
-    return max(dims)
+    if len(dims) >= MIN_PARAM_VARS:
+        return max(dims)
+    if looks_rotational and len(dims) == 2:
+        return max(dims)
+    return None
+
+
+def guess_diameter_mm(geom: dict, looks_rotational: bool = False) -> Optional[float]:
+    """
+    Диаметр тела вращения в той же узкой, подтверждённой ситуации, что и
+    guess_length_mm: ровно две параметрические переменные, деталь по имени —
+    тело вращения. Тогда меньшее значение — Ø, большее — длина (длина вала/
+    штыря/оси почти всегда больше его диаметра).
+
+    ВАЖНО: это НЕ общее решение для диаметра — для чертежей с 5+ переменными
+    (сложные валы с несколькими ступенями) диаметр здесь по-прежнему не
+    определяется, это отдельная, более сложная задача (нужно знать, какая
+    именно переменная — наружный Ø, а не диаметр отверстия/фаска/резьба).
+    """
+    dims = [float(d) for d in (geom.get("dimensions") or []) if d]
+    dims = [d for d in dims if MIN_LENGTH_MM <= d <= MAX_LENGTH_MM]
+    if looks_rotational and len(dims) == 2:
+        return min(dims)
+    return None
 
 
 # ============================================================
@@ -181,11 +212,13 @@ def extract_from_cdw(cdw_path: str) -> Extracted:
 
     mark, gost = split_material(card.get("material", ""))
     pseudo = build_pseudo_text(card, geom)
-    length = guess_length_mm(geom)
 
     part_name = card.get("name") or os.path.splitext(os.path.basename(cdw_path))[0]
     nl = part_name.lower()
     looks_rot = any(w in nl for w in ("ось", "вал", "втулк", "ролик", "фланец", "штырь", "шайб"))
+
+    length = guess_length_mm(geom, looks_rot)
+    diameter = guess_diameter_mm(geom, looks_rot)
 
     logger.info(
         f"CDW: {card.get('marking')} / {part_name} / {card.get('material')} / "
@@ -203,8 +236,8 @@ def extract_from_cdw(cdw_path: str) -> Extracted:
         # масса чистовая из CDW — точная, не распознанная
         stamp_mass_kg=card.get("mass"),
 
-        diameter_features=[],
-        max_d_mm=None,
+        diameter_features=([DiameterFeature(d_mm=diameter, tol=None)] if diameter else []),
+        max_d_mm=diameter,
         max_d_tol=None,
 
         square_features_mm=[],
