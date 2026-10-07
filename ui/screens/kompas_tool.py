@@ -16,12 +16,16 @@ ui/screens/kompas_tool.py — вкладка подключения к живо�
 
 from __future__ import annotations
 
+import os
 import threading
 import customtkinter as ctk
+from tkinter import filedialog, messagebox
 
 from integrations.kompas.connector import connect, is_available, ConnectionStatus
 from integrations.kompas.probe import generate_report
 from integrations.kompas.adapter import read_active_part
+from core.step_mesh import tessellate_step
+from ui.widgets.vtk_viewport import VtkViewport
 from core import logger
 
 
@@ -32,6 +36,7 @@ class KompasToolScreen(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
 
         self.status: ConnectionStatus | None = None
+        self.step_path: str | None = None
         self._build_ui()
         self.on_refresh()
 
@@ -85,8 +90,37 @@ class KompasToolScreen(ctk.CTkFrame):
         )
         self._detail_label.grid(row=0, column=0, sticky="ew", padx=16, pady=14)
 
-        self._output = ctk.CTkTextbox(self, font=ctk.CTkFont(family="Courier", size=12))
-        self._output.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+
+        self._output = ctk.CTkTextbox(body, font=ctk.CTkFont(family="Courier", size=12))
+        self._output.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+
+        viewer_card = ctk.CTkFrame(
+            body, corner_radius=12, fg_color=("gray92", "#141416"),
+            border_width=1, border_color=("gray80", "#222226"),
+        )
+        viewer_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        viewer_card.grid_rowconfigure(1, weight=1)
+        viewer_card.grid_columnconfigure(0, weight=1)
+
+        viewer_head = ctk.CTkFrame(viewer_card, fg_color="transparent")
+        viewer_head.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
+        ctk.CTkLabel(
+            viewer_head, text="3D просмотр (STEP) — эксперимент",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkButton(
+            viewer_head, text="Открыть STEP", height=28, corner_radius=8, width=130,
+            command=self.on_pick_step,
+        ).pack(side="right")
+
+        self._viewport = VtkViewport(viewer_card)
+        self._viewport.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+
         self._set_output(
             "Эта вкладка подключается к уже открытому КОМПАС-3D (v22 или v25) "
             "и читает его активный документ напрямую — без экспорта файлов.\n\n"
@@ -173,6 +207,45 @@ class KompasToolScreen(ctk.CTkFrame):
 
         self._set_output("\n".join(lines))
         logger.info(f"КОМПАС(live): прочитана деталь {result.drawing_no or result.part_name}")
+
+    # ── 3D просмотр (STEP) ────────────────────────────────────
+
+    def on_pick_step(self):
+        path = filedialog.askopenfilename(
+            title="Выбери STEP-модель",
+            filetypes=[("STEP", "*.stp *.step *.STP *.STEP"), ("Все файлы", "*.*")],
+        )
+        if not path:
+            return
+        self.step_path = path
+        threading.Thread(target=self._load_step_worker, args=(path,), daemon=True).start()
+
+    def _load_step_worker(self, path: str):
+        try:
+            mesh = tessellate_step(path)
+        except Exception as e:                                # noqa: BLE001
+            logger.error(f"3D просмотр: ошибка тесселяции {os.path.basename(path)}", e)
+            mesh = None
+        self.after(0, self._apply_step_mesh, path, mesh)
+
+    def _apply_step_mesh(self, path: str, mesh):
+        if mesh is None:
+            messagebox.showerror(
+                "Не удалось открыть модель",
+                f"Не получилось построить сетку для просмотра:\n{os.path.basename(path)}\n\n"
+                "Подробности — в панели разработчика (логи)."
+            )
+            return
+        ok = self._viewport.load_mesh(mesh)
+        if not ok:
+            messagebox.showwarning(
+                "3D-вьюпорт недоступен",
+                "Модель прочитана, но показать её не получилось — не хватает "
+                "зависимостей (vtk/numpy/Pillow). Подробности в панели вьюпорта слева."
+            )
+            return
+        logger.info(f"3D просмотр: показана модель {os.path.basename(path)} "
+                    f"({mesh.triangle_count} треугольников)")
 
     def _refresh_worker(self):
         status = connect() if is_available() else ConnectionStatus(
