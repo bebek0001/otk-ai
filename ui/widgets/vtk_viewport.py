@@ -44,7 +44,26 @@ from core import logger
 from core.step_mesh import MeshData
 
 try:
-    import vtk
+    # Берём классы напрямую из конкретных подмодулей vtkmodules, а НЕ через
+    # зонтичный пакет `import vtk` — тот на импорте тянет вообще все модули
+    # VTK (включая совершенно ненужные здесь, вроде vtkIOInfovis), что на
+    # некоторых машинах превращается в очень долгий (от минуты и дольше)
+    # старт приложения. Прицельный импорт — те же классы, без этого.
+    from vtkmodules.vtkCommonCore import vtkFloatArray, vtkPoints
+    from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
+    from vtkmodules.vtkRenderingCore import (
+        vtkActor,
+        vtkLight,
+        vtkPolyDataMapper,
+        vtkRenderWindow,
+        vtkRenderer,
+        vtkWindowToImageFilter,
+    )
+    # Побочный эффект импорта: регистрирует конкретную OpenGL2-реализацию
+    # рендеринга. Без этой строки рендер-окно создаётся, но не может
+    # реально рисовать (нет зарегистрированной фабрики рендер-бэкенда).
+    import vtkmodules.vtkRenderingOpenGL2  # noqa: F401
+
     import numpy as np
     from PIL import Image, ImageTk
     VTK_AVAILABLE = True
@@ -116,21 +135,21 @@ class VtkViewport(ctk.CTkFrame):
     def _build_vtk(self):
         import tkinter as tk
 
-        self._renderer = vtk.vtkRenderer()
+        self._renderer = vtkRenderer()
         self._renderer.SetBackground(0.09, 0.09, 0.11)
 
-        self._renwin = vtk.vtkRenderWindow()
+        self._renwin = vtkRenderWindow()
         self._renwin.SetOffScreenRendering(1)
         self._renwin.AddRenderer(self._renderer)
         self._renwin.SetSize(640, 480)
 
-        light = vtk.vtkLight()
+        light = vtkLight()
         light.SetLightTypeToHeadlight()
         self._renderer.AddLight(light)
 
         self._camera = self._renderer.GetActiveCamera()
 
-        self._w2i = vtk.vtkWindowToImageFilter()
+        self._w2i = vtkWindowToImageFilter()
         self._w2i.SetInput(self._renwin)
         self._w2i.ReadFrontBufferOff()
 
@@ -161,10 +180,10 @@ class VtkViewport(ctk.CTkFrame):
         if not self._ok:
             return False
         try:
-            points = vtk.vtkPoints()
-            normals = vtk.vtkFloatArray()
+            points = vtkPoints()
+            normals = vtkFloatArray()
             normals.SetNumberOfComponents(3)
-            polys = vtk.vtkCellArray()
+            polys = vtkCellArray()
 
             vd = mesh.vertex_data
             n_verts = len(vd) // 6
@@ -177,18 +196,18 @@ class VtkViewport(ctk.CTkFrame):
                 base = t * 3
                 polys.InsertNextCell(3, (base, base + 1, base + 2))
 
-            poly = vtk.vtkPolyData()
+            poly = vtkPolyData()
             poly.SetPoints(points)
             poly.SetPolys(polys)
             poly.GetPointData().SetNormals(normals)
 
-            mapper = vtk.vtkPolyDataMapper()
+            mapper = vtkPolyDataMapper()
             mapper.SetInputData(poly)
 
             if self._actor is not None:
                 self._renderer.RemoveActor(self._actor)
 
-            actor = vtk.vtkActor()
+            actor = vtkActor()
             actor.SetMapper(mapper)
             actor.GetProperty().SetInterpolationToFlat()
             actor.GetProperty().SetColor(0.55, 0.62, 0.70)
