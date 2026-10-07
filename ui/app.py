@@ -8,6 +8,7 @@ from ui.screens.batch_tool import BatchToolScreen
 from ui.screens.kompas_tool import KompasToolScreen
 from ui.screens.m3d_only_tool import M3DOnlyToolScreen
 from ui.screens.confirm_queue_tool import ConfirmQueueScreen
+from ui.screens.upload_tool import UploadToolScreen
 from core import logger
 
 
@@ -121,6 +122,7 @@ class Sidebar(ctk.CTkFrame):
 
         # Навигация
         items = [
+            ("Загрузка чертежей", "upload"),
             ("PDF инструмент",  "pdf"),
             ("3D инструмент",   "model3d"),
             ("М3D инструмент",  "m3d_only"),
@@ -211,7 +213,9 @@ class App(ctk.CTk):
         if self.current is not None:
             self.current.destroy()
 
-        if key == "pdf":
+        if key == "upload":
+            self.current = UploadToolScreen(self.content)
+        elif key == "pdf":
             self.current = DrawingToolScreen(self.content)
         elif key == "model3d":
             self.current = Model3DToolScreen(self.content)
