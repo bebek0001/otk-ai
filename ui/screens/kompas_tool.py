@@ -17,6 +17,7 @@ ui/screens/kompas_tool.py — вкладка подключения к живо�
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -24,9 +25,18 @@ from tkinter import filedialog, messagebox
 from integrations.kompas.connector import connect, is_available, ConnectionStatus
 from integrations.kompas.probe import generate_report
 from integrations.kompas.adapter import read_active_part
+from integrations.kompas.step_export import export_active_to_step
 from core.step_mesh import tessellate_step
 from ui.widgets.vtk_viewport import VtkViewport
 from core import logger
+
+# Куда экспортируем временный STEP при подтягивании модели из живого КОМПАСа.
+_LIVE_STEP_PATH = os.path.join(tempfile.gettempdir(), "otk_ai_live_kompas.step")
+
+# Период автообновления (мс) — для демонстрации: держим низким достаточно,
+# чтобы изменения в КОМПАСе были видны почти сразу, но не настолько низким,
+# чтобы экспорт STEP (не самая быстрая операция) накладывался сам на себя.
+_LIVE_POLL_MS = 4000
 
 
 class KompasToolScreen(ctk.CTkFrame):
@@ -37,8 +47,20 @@ class KompasToolScreen(ctk.CTkFrame):
 
         self.status: ConnectionStatus | None = None
         self.step_path: str | None = None
+        self._live_tracking_var = ctk.BooleanVar(value=False)
+        self._live_poll_job = None
+        self._live_pull_busy = False
         self._build_ui()
         self.on_refresh()
+
+    def destroy(self):
+        if self._live_poll_job is not None:
+            try:
+                self.after_cancel(self._live_poll_job)
+            except Exception:                                 # noqa: BLE001
+                pass
+            self._live_poll_job = None
+        super().destroy()
 
     def _build_ui(self):
         top = ctk.CTkFrame(
@@ -114,9 +136,23 @@ class KompasToolScreen(ctk.CTkFrame):
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(side="left")
         ctk.CTkButton(
-            viewer_head, text="Открыть STEP", height=28, corner_radius=8, width=130,
+            viewer_head, text="Открыть STEP", height=28, corner_radius=8, width=110,
+            fg_color=("gray88", "gray25"), hover_color=("gray80", "gray30"),
+            text_color=("gray10", "gray90"),
             command=self.on_pick_step,
         ).pack(side="right")
+        self._live_check = ctk.CTkCheckBox(
+            viewer_head, text="Автообновление", variable=self._live_tracking_var,
+            command=self._on_toggle_live_tracking,
+            onvalue=True, offvalue=False, checkbox_width=18, checkbox_height=18,
+        )
+        self._live_check.pack(side="right", padx=(0, 10))
+        self._live_btn = ctk.CTkButton(
+            viewer_head, text="Подтянуть модель из КОМПАСа", height=28, corner_radius=8,
+            fg_color="#2E7D32", hover_color="#1B5E20",
+            command=self.on_live_pull,
+        )
+        self._live_btn.pack(side="right", padx=(0, 10))
 
         self._viewport = VtkViewport(viewer_card)
         self._viewport.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -246,6 +282,86 @@ class KompasToolScreen(ctk.CTkFrame):
             return
         logger.info(f"3D просмотр: показана модель {os.path.basename(path)} "
                     f"({mesh.triangle_count} треугольников)")
+
+    # ── 3D просмотр (живой КОМПАС) ────────────────────────────
+
+    def on_live_pull(self):
+        """Подтягивает модель прямо из уже открытого в КОМПАСе документа
+        (экспорт в STEP + тесселяция), без ручного выбора файла."""
+        if self._live_pull_busy:
+            return
+        self._live_pull_busy = True
+        self._live_btn.configure(state="disabled", text="Подтягиваю из КОМПАСа…")
+        threading.Thread(target=self._live_pull_worker, args=(True,), daemon=True).start()
+
+    def _on_toggle_live_tracking(self):
+        if self._live_tracking_var.get():
+            logger.info("3D просмотр: включено автообновление из живого КОМПАСа")
+            self._schedule_live_poll()
+        else:
+            logger.info("3D просмотр: автообновление выключено")
+            if self._live_poll_job is not None:
+                self.after_cancel(self._live_poll_job)
+                self._live_poll_job = None
+
+    def _schedule_live_poll(self):
+        self._live_poll_job = self.after(_LIVE_POLL_MS, self._run_live_poll)
+
+    def _run_live_poll(self):
+        self._live_poll_job = None
+        if not self._live_tracking_var.get():
+            return
+        if self._live_pull_busy:
+            # Предыдущий экспорт ещё не закончился — пропускаем такт,
+            # пробуем снова на следующем.
+            self._schedule_live_poll()
+            return
+        self._live_pull_busy = True
+        threading.Thread(target=self._live_pull_worker, args=(False,), daemon=True).start()
+
+    def _live_pull_worker(self, manual: bool):
+        export_result = export_active_to_step(_LIVE_STEP_PATH)
+        if not export_result.ok:
+            self.after(0, self._apply_live_pull_result, None, export_result.error, manual)
+            return
+        try:
+            mesh = tessellate_step(_LIVE_STEP_PATH)
+        except Exception as e:                                # noqa: BLE001
+            self.after(0, self._apply_live_pull_result, None,
+                       f"Модель экспортирована, но не удалось построить сетку: {e}", manual)
+            return
+        if mesh is None:
+            self.after(0, self._apply_live_pull_result, None,
+                       "Модель экспортирована, но в ней не нашлось геометрии для показа.",
+                       manual)
+            return
+        self.after(0, self._apply_live_pull_result, mesh, "", manual)
+
+    def _apply_live_pull_result(self, mesh, error: str, manual: bool):
+        self._live_pull_busy = False
+        self._live_btn.configure(state="normal", text="Подтянуть модель из КОМПАСа")
+
+        if mesh is not None:
+            self.step_path = None
+            ok = self._viewport.load_mesh(mesh)
+            if ok:
+                logger.info(f"3D просмотр: модель подтянута из живого КОМПАСа "
+                            f"({mesh.triangle_count} треугольников)")
+            elif manual:
+                messagebox.showwarning(
+                    "3D-вьюпорт недоступен",
+                    "Модель прочитана из КОМПАСа, но показать её не получилось — не "
+                    "хватает зависимостей (vtk/numpy/Pillow)."
+                )
+        elif manual:
+            messagebox.showerror("Не удалось подтянуть модель из КОМПАСа", error)
+        elif error:
+            logger.warn(f"Автообновление из КОМПАСа: {error}")
+
+        # Автообновление продолжаем планировать, даже если этот такт не удался —
+        # КОМПАС может просто быть временно занят (например, идёт пересчёт).
+        if self._live_tracking_var.get():
+            self._schedule_live_poll()
 
     def _refresh_worker(self):
         status = connect() if is_available() else ConnectionStatus(
