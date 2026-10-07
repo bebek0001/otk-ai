@@ -236,6 +236,20 @@ class CalcResult:
     result_line: str
     protocol: str
 
+    # ------------------------------------------------------------------
+    # Очередь подтверждения (см. core.confirm_queue).
+    #
+    # needs_confirmation=True ставится ТОЛЬКО там, где ответ угадан —
+    # слоем RAG (поиск по похожим эталонам) или Vision (GPT смотрит на
+    # картинку чертежа). Детерминированный расчёт по ГОСТ/формулам
+    # (в т.ч. CDW+расчёт в core/stock_ext.py) этот флаг не трогает —
+    # это точная арифметика по точным исходным данным, не угадывание,
+    # и подтверждения не требует.
+    #
+    # source_kind: "calc" (формулы/ГОСТ, по умолчанию) | "rag" | "vision".
+    needs_confirmation: bool = False
+    source_kind: str = "calc"
+
 
 # ============================================================
 # OpenAI
@@ -1368,6 +1382,8 @@ def calculate_missing_stock_line(ex: Extracted, l_part_mm: float, material_mark:
                 mass_stamp_kg=ex.stamp_mass_kg,
                 result_line=rag["result_line"],
                 protocol="\n".join(prot_rag),
+                needs_confirmation=True,
+                source_kind=("vision" if _is_vision else "rag"),
             )
         else:
             logger.info("RAG: подходящего ответа по базе нет — считаю формулами")

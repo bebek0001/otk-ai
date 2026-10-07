@@ -62,4 +62,9 @@ EMBEDDINGS_CACHE_PATH = (
 # закончилась обработка. См. core.activity_log.
 PROCESSING_LOG_DIR = USER_DATA_DIR / "processing_log"
 
+# Очередь подтверждения: результаты RAG/ИИ-добора (угаданные, а не
+# посчитанные детерминированно), ждущие проверки технологом перед тем,
+# как попасть в базу эталонов. См. core.confirm_queue.
+CONFIRM_QUEUE_PATH = USER_DATA_DIR / "confirm_queue.json"
+
 GOSTS_DIR = PROJECT_ROOT / "gosts"

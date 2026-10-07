@@ -34,7 +34,7 @@ DEFAULTS = {
     # ИИ модель
     "ai_model":           "gpt-4o-mini",
     # Движок Vision (распознавание чертежа): "openai" или "claude"
-    "vision_engine":      "openai",
+    "vision_engine":      "claude",
     # Припуски (мм)
     "allowance_length_mm": "20",
     "allowance_small_mm":  "5",

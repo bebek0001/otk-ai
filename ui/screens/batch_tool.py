@@ -36,6 +36,29 @@ from core.drawing_db import build_etalon_examples_block, lookup_etalon
 from core.gost_reader import get_gost_context_for_query
 from core import logger
 from core import activity_log
+from core import confirm_queue
+
+
+def _enqueue_if_guessed(res, ex, path: str) -> None:
+    """
+    Если calculate_missing_stock_line() ответил через RAG/Vision (угадал
+    по похожим чертежам/картинке, а не посчитал по ГОСТ) — кладёт
+    результат в очередь подтверждения, чтобы он не попал в базу
+    эталонов как новый образец без проверки технологом. Детерминированный
+    расчёт (в т.ч. CDW+расчёт) сюда не попадает — он сам по себе не
+    пишется в базу из пакетной обработки, подтверждение ему не нужно.
+    Best-effort: ошибка здесь не должна срывать пакетную обработку.
+    """
+    if not getattr(res, "needs_confirmation", False):
+        return
+    try:
+        fields = confirm_queue.calc_result_to_pending_fields(
+            res, pdf_text=ex.pdf_text, part_name=ex.part_name,
+            source_file=path,
+        )
+        confirm_queue.add_pending(fields)
+    except Exception as e:                                    # noqa: BLE001
+        logger.warn(f"Не удалось поставить в очередь подтверждения {path}: {e}")
 
 
 # ============================================================
@@ -276,7 +299,8 @@ def process_one_pdf(pdf_path: str) -> dict:
         result["stock_size"]     = stock_size
         result["stock_mass_kg"]  = stock_mass
         result["zagotovka_full"] = new_sortament
-        result["source"]         = "расчёт"
+        result["source"]         = "RAG (ждёт подтверждения)" if getattr(res, "needs_confirmation", False) else "расчёт"
+        _enqueue_if_guessed(res, ex, pdf_path)
 
     except Exception as e:
         result["status"] = "❌ ошибка"
@@ -397,7 +421,8 @@ def process_one_cdw(cdw_path: str) -> dict:
         result["stock_size"]     = stock_size
         result["stock_mass_kg"]  = stock_mass
         result["zagotovka_full"] = new_sortament
-        result["source"]         = "CDW+расчёт"
+        result["source"]         = "CDW+RAG (ждёт подтверждения)" if getattr(res, "needs_confirmation", False) else "CDW+расчёт"
+        _enqueue_if_guessed(res, ex, cdw_path)
 
     except Exception as e:
         result["status"] = "❌ ошибка"
@@ -742,12 +767,12 @@ def export_to_excel(results: list, save_path: str) -> None:
         src = r.get("source", "")
 
         if r["status"] == "ОК":
-            if src.startswith("CDW"):
+            if "RAG" in src or src.startswith("ИИ"):
+                fill = ai_fill
+            elif src.startswith("CDW"):
                 fill = cdw_fill
             elif src == "расчёт":
                 fill = ok_fill
-            elif src.startswith("ИИ"):
-                fill = ai_fill
             else:
                 fill = db_fill
         elif "⚠" in r["status"]:
@@ -792,7 +817,8 @@ def export_to_excel(results: list, save_path: str) -> None:
         (cdw_fill,  "Прочитано из файла КОМПАС (.cdw) — точные данные"),
         (db_fill,   "Из базы эталонов"),
         (ok_fill,   "Из расчёта по ГОСТ"),
-        (ai_fill,   "Определено ИИ"),
+        (ai_fill,   "Определено ИИ/RAG — поставлено в очередь подтверждения, "
+                    "в базу эталонов попадёт только после проверки технологом"),
         (warn_fill, "Предупреждение — часть данных не определена"),
         (err_fill,  "Ошибка обработки"),
     ]):

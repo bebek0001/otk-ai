@@ -23,6 +23,7 @@ from core.engine import (
 from core.settings import load_settings
 from core.allowances import ALLOWANCE_METHODOLOGY_TEXT
 from core.drawing_db import lookup_etalon, save_etalon, db_stats, build_etalon_examples_block
+from core import confirm_queue
 from core import logger
 
 
@@ -354,16 +355,62 @@ class DrawingToolScreen(ctk.CTkFrame):
         self.btn_copy.configure(state="normal")
         self.btn_open_gost.configure(state="normal" if res.gost_pdf_path else "disabled")
         self.btn_ai.configure(state="normal")
-        self.btn_save_etalon.configure(state="normal")  # ← разблокируем сохранение
+        # ← разблокируем сохранение. Если ответ угадан RAG/Vision, а не
+        # посчитан по ГОСТ/формулам — в базу эталонов он не уходит сразу,
+        # а отправляется на подтверждение технологом (см. on_save_etalon).
+        if getattr(res, "needs_confirmation", False):
+            self.btn_save_etalon.configure(
+                state="normal", text="Отправить на подтверждение",
+                fg_color="#7c3aed",
+            )
+        else:
+            self.btn_save_etalon.configure(
+                state="normal", text="Сохранить эталон",
+                fg_color="#1f6aa5",
+            )
 
     def on_save_etalon(self):
-        """Сохраняет текущий результат в базу эталонов."""
+        """
+        Сохраняет текущий результат.
+
+        Детерминированный расчёт (по ГОСТ/формулам) уходит прямо в базу
+        эталонов — это точная арифметика по точным данным. Ответ,
+        угаданный RAG-слоем (похожий чертёж из базы) или Vision (GPT
+        посмотрел на картинку), вместо этого отправляется в очередь
+        подтверждения — его должен проверить и подтвердить технолог,
+        прежде чем он станет новым эталоном.
+        """
         if not self.extracted or not self.last_result:
             messagebox.showwarning("Нет данных", "Сначала выполни расчёт.")
             return
 
         res = self.last_result
         ex = self.extracted
+
+        if getattr(res, "needs_confirmation", False):
+            try:
+                fields = confirm_queue.calc_result_to_pending_fields(
+                    res, pdf_text=ex.pdf_text, part_name=ex.part_name,
+                    source_file=self.pdf_path or "",
+                )
+                confirm_queue.add_pending(fields)
+                msg = (
+                    f"Ответ сформирован RAG/Vision (угадан по похожим чертежам), "
+                    f"а не посчитан по ГОСТ — отправлен в очередь подтверждения.\n\n"
+                    f"Деталь: {ex.part_name}\n"
+                    f"Заготовка: {res.result_line}\n\n"
+                    f"Проверь и подтверди во вкладке «Очередь подтверждения» — "
+                    f"только после этого запись станет эталоном в базе."
+                )
+                messagebox.showinfo("Отправлено на подтверждение", msg)
+                self.btn_save_etalon.configure(
+                    state="disabled", text="Отправлено на проверку", fg_color="#4a3b70"
+                )
+                logger.info(f"В очередь подтверждения: {ex.part_name} ({res.source_kind})")
+            except Exception as e:
+                messagebox.showerror("Ошибка отправки на подтверждение", str(e))
+                logger.error("Ошибка отправки в очередь подтверждения", e)
+            return
 
         try:
             record = save_etalon(

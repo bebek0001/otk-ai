@@ -407,7 +407,7 @@ import base64
 VISION_PROVIDER = "openai"
 
 VISION_MODEL = "gpt-4o"                      # модель OpenAI для Vision
-CLAUDE_VISION_MODEL = "claude-sonnet-4-6"    # модель Claude для Vision
+CLAUDE_VISION_MODEL = "claude-sonnet-5-5"    # модель Claude для Vision
 
 
 def _get_vision_engine() -> str:

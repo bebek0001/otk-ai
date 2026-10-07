@@ -26,6 +26,7 @@ drawing_db.json
 drawing_db.backup*.json
 drawing_db.json.bak_*
 embeddings_cache.json
+confirm_queue.json
 
 # Локальные архивы
 project.zip
