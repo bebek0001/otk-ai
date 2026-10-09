@@ -9,6 +9,7 @@ from ui.screens.kompas_tool import KompasToolScreen
 from ui.screens.m3d_only_tool import M3DOnlyToolScreen
 from ui.screens.confirm_queue_tool import ConfirmQueueScreen
 from ui.screens.upload_tool import UploadToolScreen
+from ui.screens.assistant_tool import AssistantScreen
 from core import logger
 
 
@@ -130,6 +131,7 @@ class Sidebar(ctk.CTkFrame):
             ("Пакетная обработка", "batch"),
             ("КОМПАС",          "kompas"),
             ("Очередь подтверждения", "confirm_queue"),
+            ("Помощник технолога", "assistant"),
             ("Настройки",       "settings"),
         ]
 
@@ -229,6 +231,8 @@ class App(ctk.CTk):
             self.current = KompasToolScreen(self.content)
         elif key == "confirm_queue":
             self.current = ConfirmQueueScreen(self.content)
+        elif key == "assistant":
+            self.current = AssistantScreen(self.content)
         elif key == "settings":
             self.current = SettingsScreen(self.content)
         else:

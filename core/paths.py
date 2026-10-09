@@ -68,3 +68,7 @@ PROCESSING_LOG_DIR = USER_DATA_DIR / "processing_log"
 CONFIRM_QUEUE_PATH = USER_DATA_DIR / "confirm_queue.json"
 
 GOSTS_DIR = PROJECT_ROOT / "gosts"
+
+
+# Помощник технолога: решения, версии модели, очередь позиций для разбора
+ASSISTANT_DIR = USER_DATA_DIR / "assistant"

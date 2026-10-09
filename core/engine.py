@@ -1223,7 +1223,13 @@ def detect_sheet_size_from_stamp(pdf_text: str) -> Optional[float]:
     return None
 
 
+# Тип заготовки, выбранный технологом (помощник). None — определяет движок.
+FORCED_STOCK_TYPE: Optional[str] = None
+
+
 def detect_stock_type(ex: Extracted) -> str:
+    if FORCED_STOCK_TYPE:
+        return FORCED_STOCK_TYPE
     name_l = (ex.part_name or "").lower()
     text_l = (ex.pdf_text or "").lower()
 

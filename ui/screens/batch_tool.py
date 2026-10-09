@@ -37,6 +37,19 @@ from core.gost_reader import get_gost_context_for_query
 from core import logger
 from core import activity_log
 from core import confirm_queue
+from core.assistant import store as assistant_store
+
+
+def _register_case(path: str, ex, result: dict, error: str) -> None:
+    """Позиция, где заготовка не определилась, уходит в «Помощник технолога».
+    Best-effort: сбой здесь не должен срывать пакетную обработку."""
+    try:
+        assistant_store.add_case(
+            source_file=path, part_name=result.get("part_name") or ex.part_name or "",
+            material=result.get("material", ""), length_mm=getattr(ex, "length_mm", None),
+            drawing_no=result.get("drawing_no", ""), reason="error", error=error)
+    except Exception as e:                                    # noqa: BLE001
+        logger.warn(f"Помощник: позиция не поставлена на разбор {path}: {e}")
 
 
 def _enqueue_if_guessed(res, ex, path: str) -> None:
@@ -292,7 +305,14 @@ def process_one_pdf(pdf_path: str) -> dict:
             result["error"]  = "Длина детали не определена"
             return result
 
-        res = calculate_missing_stock_line(ex, length_mm, mark, gost)
+        try:
+            res = calculate_missing_stock_line(ex, length_mm, mark, gost)
+        except Exception as calc_err:
+            result["status"] = "⚠ заготовка не определена"
+            result["error"]  = str(calc_err)[:120]
+            _register_case(pdf_path, ex, result, str(calc_err))
+            logger.warn(f"PDF {name}: расчёт заготовки не удался: {calc_err}")
+            return result
         new_sortament, stock_size, stock_mass = parse_result_line(res.result_line)
 
         result["new_sortament"]  = new_sortament
@@ -412,6 +432,7 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["status"] = "⚠ заготовка не определена"
             result["error"]  = str(calc_err)[:120]
             result["source"] = "CDW"
+            _register_case(cdw_path, ex, result, str(calc_err))
             logger.warn(f"CDW {name}: расчёт заготовки не удался: {calc_err}")
             return result
 

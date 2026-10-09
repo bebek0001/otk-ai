@@ -53,3 +53,4 @@ typing_extensions==4.15.0
 urllib3==2.6.3
 vtk==9.6.2
 websockets==15.0.1
+scikit-learn==1.7.2
