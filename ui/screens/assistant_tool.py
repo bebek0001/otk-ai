@@ -139,10 +139,13 @@ class AssistantScreen(ctk.CTkFrame):
         bottom.grid_columnconfigure(0, weight=1)
         self.lbl_progress = ctk.CTkLabel(bottom, text="", text_color=_MUTED)
         self.lbl_progress.grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(bottom, text="Выгрузить в формате заказчика", height=32,
+                      corner_radius=10, command=self._export_client
+                      ).grid(row=1, column=0, sticky="ew", pady=(6, 0))
         ctk.CTkButton(bottom, text="Выгрузить решения в Excel", height=32,
                       corner_radius=10, fg_color=("gray88", "gray25"),
                       hover_color=("gray80", "gray30"), text_color=("gray10", "gray90"),
-                      command=self._export).grid(row=1, column=0, sticky="ew", pady=(6, 0))
+                      command=self._export).grid(row=2, column=0, sticky="ew", pady=(6, 0))
 
         self.detail = ctk.CTkScrollableFrame(r, corner_radius=14, fg_color=_BG_CARD,
                                              border_width=1, border_color=_BORDER)
@@ -340,6 +343,19 @@ class AssistantScreen(ctk.CTkFrame):
         self.refresh()
         if self._items:
             self._select(self._items[0])
+
+    def _export_client(self):
+        if not self._results:
+            messagebox.showinfo("Помощник", "Пока нет принятых решений.")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx",
+                                            filetypes=[("Excel", "*.xlsx")],
+                                            initialfile="заготовки.xlsx")
+        if not path:
+            return
+        from core.client_format import export_client_xlsx
+        export_client_xlsx(self._results, path)
+        messagebox.showinfo("Помощник", f"Сохранено: {path}")
 
     def _export(self):
         if not self._results:

@@ -51,3 +51,19 @@ def test_decision_replaces_same_drawing(tmp_path, monkeypatch):
     st.add_decision("Вал", "45", 100, "Квадрат", "X.1")
     d = st.load_decisions()
     assert len(d) == 1 and d[0]["stock_type"] == "Квадрат"
+
+
+def test_client_format_rows():
+    from core import client_format as cf
+    res = [
+        {"status": "ОК", "drawing_no": "290426.00.00.002", "part_name": "Штырь направляющий",
+         "new_sortament": "Шестигранник 24 ГОСТ2879-2006", "stock_size": "L=150",
+         "stock_mass_kg": "0,60", "clean_mass_kg": "0,33", "material": "Ст2пс ГОСТ 535-2005"},
+        {"status": "⚠ нет длины", "drawing_no": "290426.00.00.021", "part_name": "Полоса",
+         "error": "длина не определена", "clean_mass_kg": "0,14"},
+    ]
+    rows = cf.rows_for_client(res)
+    assert rows[0][3] == "Шестигранник 24 ГОСТ 2879-2006/ Ст2пс ГОСТ 535-2005"
+    assert rows[0][4] == "Шестигранник 24, L=150"
+    assert rows[0][5] == "0,6" and rows[0][6] == "0,33"
+    assert rows[1][3] == "" and rows[1][7] == "длина не определена"
