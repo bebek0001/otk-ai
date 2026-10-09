@@ -13,6 +13,7 @@ ui/screens/assistant_tool.py — «Помощник технолога».
 
 from __future__ import annotations
 
+import queue
 import threading
 from tkinter import filedialog, messagebox
 from typing import Any, Dict, List, Optional
@@ -45,10 +46,37 @@ class AssistantScreen(ctk.CTkFrame):
         self._results: List[dict] = []      # результаты принятых за сессию
         self._total = 0
         self._busy = False
+        # Фоновые потоки не трогают Tk: результат кладётся в очередь,
+        # а окно обновляет главный поток (на macOS иначе возможен вылет).
+        self._ui_q: "queue.Queue" = queue.Queue()
+        self._poll_job = None
 
         self._build_header()
         self._build_tabs()
         self.refresh()
+        self._poll()
+
+    def _poll(self):
+        try:
+            while True:
+                fn = self._ui_q.get_nowait()
+                fn()
+        except queue.Empty:
+            pass
+        except Exception as e:                                # noqa: BLE001
+            logger.error(f"Помощник: ошибка обновления окна: {e}")
+        try:
+            self._poll_job = self.after(120, self._poll)
+        except Exception:                                     # noqa: BLE001
+            self._poll_job = None
+
+    def destroy(self):
+        if self._poll_job is not None:
+            try:
+                self.after_cancel(self._poll_job)
+            except Exception:                                 # noqa: BLE001
+                pass
+        super().destroy()
 
     # ── каркас ──────────────────────────────────────────────
 
@@ -282,7 +310,7 @@ class AssistantScreen(ctk.CTkFrame):
         except Exception as e:                                # noqa: BLE001
             res, err = None, str(e)
             logger.error(f"Помощник: не удалось принять: {e}")
-        self.after(0, lambda: self._after_accept(it, st, res, err))
+        self._ui_q.put(lambda: self._after_accept(it, st, res, err))
 
     def _accept_guess(self, it, st):
         q = it["queue"]
@@ -429,7 +457,7 @@ class AssistantScreen(ctk.CTkFrame):
                 rep = model.train()
             except Exception as e:                            # noqa: BLE001
                 rep = {"ok": False, "reason": str(e)}
-            self.after(0, lambda: self._after_train(rep))
+            self._ui_q.put(lambda: self._after_train(rep))
         threading.Thread(target=work, daemon=True).start()
 
     def _after_train(self, rep):
