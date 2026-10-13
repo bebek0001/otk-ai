@@ -1280,7 +1280,46 @@ def detect_stock_type(ex: Extracted) -> str:
 # ГЛАВНАЯ ФУНКЦИЯ РАСЧЁТА
 # ============================================================
 
+def _formulas_first_enabled() -> bool:
+    """Режим расчёта из настроек: 'formulas_first' (по умолчанию) или 'ai_first'."""
+    try:
+        from core import settings
+        return settings.load_settings().get("calc_mode", "formulas_first") != "ai_first"
+    except Exception:                                         # noqa: BLE001
+        return True
+
+
 def calculate_missing_stock_line(ex: Extracted, l_part_mm: float, material_mark: str, material_gost: str) -> CalcResult:
+    """
+    Режим «сначала формулы»: заготовка считается детерминированно, без
+    интернета. Слой ИИ (Vision/RAG) подключается, только если формулы
+    не смогли дать ответ. Режим «сначала ИИ» (calc_mode = ai_first) —
+    прежнее поведение. Результат больше не зависит от связи в обычном случае.
+    """
+    global USE_RAG
+    if not _formulas_first_enabled():
+        return _calculate_stock_core(ex, l_part_mm, material_mark, material_gost)
+
+    saved = USE_RAG
+    USE_RAG = False
+    formula_err = None
+    try:
+        return _calculate_stock_core(ex, l_part_mm, material_mark, material_gost)
+    except Exception as e:                                    # noqa: BLE001
+        formula_err = e
+    finally:
+        USE_RAG = saved
+
+    logger.info(f"Формулы не дали ответа ({formula_err}), пробую слой ИИ")
+    if not (USE_RAG and _RAG_AVAILABLE):
+        raise formula_err
+    try:
+        return _calculate_stock_core(ex, l_part_mm, material_mark, material_gost)
+    except Exception:                                         # noqa: BLE001
+        raise formula_err
+
+
+def _calculate_stock_core(ex: Extracted, l_part_mm: float, material_mark: str, material_gost: str) -> CalcResult:
     logger.info(f"Начинаю расчёт заготовки: деталь={ex.part_name}, L={l_part_mm} мм")
 
     # ========================================================

@@ -67,3 +67,50 @@ def test_client_format_rows():
     assert rows[0][4] == "Шестигранник 24, L=150"
     assert rows[0][5] == "0,6" and rows[0][6] == "0,33"
     assert rows[1][3] == "" and rows[1][7] == "длина не определена"
+
+
+def test_mass_check():
+    from core import mass_check as mc
+    assert mc.check("0,6", "0,33") == (True, "")
+    assert mc.check("0,036", "0,005")[0] is True          # реальный эталон, отношение 7,2
+    assert mc.check("0,2", "0,33")[0] is False            # легче детали
+    assert mc.check("5", "0,3")[0] is False               # в 16 раз тяжелее
+    assert mc.check("", "0,3") == (True, "")              # нет массы, проверки нет
+
+
+def test_mass_check_on_real_etalons():
+    import json, pathlib
+    from core import mass_check as mc
+    db = json.loads((pathlib.Path(__file__).resolve().parents[1] / "seed" / "drawing_db.json").read_text(encoding="utf-8"))
+    for r in db:
+        if r.get("mass_clean_kg"):
+            assert mc.check(r["mass_kg"], r["mass_clean_kg"])[0], r["part_name"]
+
+
+def test_formulas_first_does_not_use_rag(monkeypatch):
+    from core import engine
+    seen = {}
+
+    def core_stub(ex, l, m, g):
+        seen["rag"] = engine.USE_RAG
+        return "ok"
+    monkeypatch.setattr(engine, "_calculate_stock_core", core_stub)
+    monkeypatch.setattr(engine, "_formulas_first_enabled", lambda: True)
+    assert engine.calculate_missing_stock_line(None, 1, "", "") == "ok"
+    assert seen["rag"] is False and engine.USE_RAG is True   # флаг восстановлен
+
+
+def test_formulas_fail_then_ai_layer(monkeypatch):
+    from core import engine
+    calls = []
+
+    def core_stub(ex, l, m, g):
+        calls.append(engine.USE_RAG)
+        if not engine.USE_RAG:
+            raise ValueError("формулы не смогли")
+        return "ai-answer"
+    monkeypatch.setattr(engine, "_calculate_stock_core", core_stub)
+    monkeypatch.setattr(engine, "_formulas_first_enabled", lambda: True)
+    monkeypatch.setattr(engine, "_RAG_AVAILABLE", True)
+    assert engine.calculate_missing_stock_line(None, 1, "", "") == "ai-answer"
+    assert calls == [False, True]

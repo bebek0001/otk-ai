@@ -25,6 +25,11 @@ def recalc_with_type(source_file: str, stock_type: str) -> Dict[str, Any]:
 def accept(case: Dict[str, Any], stock_type: str) -> Dict[str, Any]:
     """Технолог подтвердил тип: пересчёт, решение в обучающую базу, позиция закрыта."""
     result = recalc_with_type(case["source_file"], stock_type)
+    if result.get("status") == "⚠ масса не сходится":
+        # Технолог сам выбрал тип и отвечает за выбор: расхождение по массе
+        # остаётся в примечании, но не блокирует решение.
+        result["status"] = "ОК"
+        result["error"] = ""
     if str(result.get("status", "")).startswith("⚠") or result.get("status") == "❌ ошибка":
         # не удалось посчитать с этим типом — решение не сохраняем
         return result

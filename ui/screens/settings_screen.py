@@ -113,6 +113,22 @@ class SettingsScreen(ctk.CTkFrame):
             text_color=("gray50", "#888888"), font=ctk.CTkFont(size=11),
         ).pack(side="left")
 
+        # Режим расчёта: что первым определяет заготовку
+        mode_frame = engine_frame
+        ctk.CTkLabel(mode_frame, text="      Режим расчёта:", anchor="w").pack(side="left")
+        self._mode_map = {"Сначала формулы": "formulas_first", "Сначала ИИ (нужен интернет)": "ai_first"}
+        self._mode_map_rev = {v: k for k, v in self._mode_map.items()}
+        self.var_mode = ctk.StringVar(
+            value=self._mode_map_rev.get(self.settings.get("calc_mode", "formulas_first"), "Сначала формулы"))
+        ctk.CTkOptionMenu(
+            mode_frame, values=list(self._mode_map.keys()), variable=self.var_mode,
+            width=210, height=32, corner_radius=8,
+            fg_color=("gray88", "gray25"), button_color=("gray75", "gray35"),
+            button_hover_color=("gray65", "gray40"), text_color=("gray10", "gray90"),
+            dropdown_fg_color=("gray95", "gray20"), dropdown_hover_color=("gray85", "gray30"),
+            dropdown_text_color=("gray10", "gray90"),
+        ).pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(tab, text="Промпт для PDF инструмента:",
                      font=ctk.CTkFont(size=12), anchor="w").grid(
             row=2, column=0, sticky="w", pady=(0, 4)
@@ -355,6 +371,7 @@ class SettingsScreen(ctk.CTkFrame):
         s["ai_prompt_3d"]       = self.txt_3d.get("1.0", "end").strip()
         s["ai_model"]           = self.var_model.get()
         s["vision_engine"]      = self._vision_map.get(self.var_vision.get(), "openai")
+        s["calc_mode"]          = self._mode_map.get(self.var_mode.get(), "formulas_first")
         s["ui_theme"]           = self.var_theme.get()
         s["language"]           = self.var_lang.get()
         s["auto_save_etalon"]   = self.var_autosave.get()
@@ -380,6 +397,7 @@ class SettingsScreen(ctk.CTkFrame):
             self.var_vision.set(
                 self._vision_map_rev.get(self.settings.get("vision_engine", "openai"), "GPT (OpenAI)")
             )
+            self.var_mode.set(self._mode_map_rev.get(self.settings.get("calc_mode", "formulas_first"), "Сначала формулы"))
             self.var_theme.set(self.settings["ui_theme"])
             self.var_autosave.set(self.settings["auto_save_etalon"])
             for key, var in self._calc_vars.items():

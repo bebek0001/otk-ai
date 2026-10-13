@@ -38,6 +38,18 @@ from core import logger
 from core import activity_log
 from core import confirm_queue
 from core.assistant import store as assistant_store
+from core import mass_check
+
+
+def _apply_mass_check(result: dict, path: str, ex) -> None:
+    """Масса заготовки против массы детали. Не сходится: строка с пометкой
+    «⚠ масса не сходится» и на разбор технологу (расчётные значения остаются)."""
+    ok, msg = mass_check.check(result.get("stock_mass_kg"), result.get("clean_mass_kg"))
+    if ok:
+        return
+    result["status"] = "⚠ масса не сходится"
+    result["error"] = msg[:160]
+    _register_case(path, ex, result, msg)
 
 
 def _register_case(path: str, ex, result: dict, error: str) -> None:
@@ -321,6 +333,7 @@ def process_one_pdf(pdf_path: str) -> dict:
         result["zagotovka_full"] = new_sortament
         result["source"]         = "RAG (ждёт подтверждения)" if getattr(res, "needs_confirmation", False) else "расчёт"
         _enqueue_if_guessed(res, ex, pdf_path)
+        _apply_mass_check(result, pdf_path, ex)
 
     except Exception as e:
         result["status"] = "❌ ошибка"
@@ -444,6 +457,7 @@ def process_one_cdw(cdw_path: str) -> dict:
         result["zagotovka_full"] = new_sortament
         result["source"]         = "CDW+RAG (ждёт подтверждения)" if getattr(res, "needs_confirmation", False) else "CDW+расчёт"
         _enqueue_if_guessed(res, ex, cdw_path)
+        _apply_mass_check(result, cdw_path, ex)
 
     except Exception as e:
         result["status"] = "❌ ошибка"
