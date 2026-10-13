@@ -40,6 +40,18 @@ jobs:
           pip install -r ${{ matrix.requirements }}
           pip install pyinstaller
 
+      - name: Smoke test imports
+        shell: pwsh
+        run: |
+          python -c "import sklearn, scipy, numpy; from core.assistant import model; from core import cdw_dims, mass_check; print('ok', sklearn.__version__, scipy.__version__, numpy.__version__)"
+
+      - name: Unit tests (не блокируют сборку)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests
+
       - name: Build executable
         shell: pwsh
         run: |

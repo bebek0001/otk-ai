@@ -23,8 +23,8 @@ datas += ctk_datas
 binaries += ctk_binaries
 hiddenimports += ctk_imports
 
-# CAD / 3D
-for package in ["OCP", "vtkmodules"]:
+# CAD / 3D и ML помощника технолога (scikit-learn + scipy грузят модули динамически)
+for package in ["OCP", "vtkmodules", "sklearn", "scipy"]:
     pkg_datas, pkg_binaries, pkg_imports = collect_all(
         package
     )
