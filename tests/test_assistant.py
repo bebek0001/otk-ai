@@ -114,3 +114,23 @@ def test_formulas_fail_then_ai_layer(monkeypatch):
     monkeypatch.setattr(engine, "_RAG_AVAILABLE", True)
     assert engine.calculate_missing_stock_line(None, 1, "", "") == "ai-answer"
     assert calls == [False, True]
+
+
+def test_cdw_dims_sections_and_proposal():
+    from core import cdw_dims as D
+    sec = D.parse_section("Круг 40 ГОСТ 2590-2006/ 45 ГОСТ 1050-2013")
+    assert sec.kind == "Круг" and sec.sizes == (40.0,)
+    assert D.parse_section("Труба 108x20 ГОСТ 8732-2025").sizes == (108.0, 20.0)
+    assert D.parse_section("Уголок 40х40х5 ГОСТ 8509-93").area_mm2 == 75 * 5
+    assert D.parse_section("Лист 16 ГОСТ 19903-2015").kind == "Лист"
+    # Штырь Ø40: деталь 95 мм, масса 0,65 кг -> заготовка 105
+    p = D.propose_length(sec, [10.0, 35.0, 95.0], 0.65, 7850.0)
+    assert p.part_length_mm == 95.0 and p.blank_length_mm == 105.0
+    # Размеров нет или лист: предложения нет
+    assert D.propose_length(sec, [], 0.65).blank_length_mm is None
+    sheet = D.parse_section("Лист 4 ГОСТ 19903-2015")
+    assert D.propose_length(sheet, [100.0], 1.0).blank_length_mm is None
+    # Радиус не принимается за длину; нереальная масса отбрасывается
+    big = D.parse_section("Круг 220 ГОСТ 2590-2006")
+    p2 = D.propose_length(big, [110.0, 20.0], 5.64, 7850.0)
+    assert p2.part_length_mm != 110.0

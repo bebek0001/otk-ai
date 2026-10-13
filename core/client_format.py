@@ -60,7 +60,7 @@ def rows_for_client(results: List[Dict[str, Any]], include_errors: bool = True):
     rows = []
     results = [r for r in results if r.get("status") != "Сборка (пропуск)"]
     for i, r in enumerate(sorted(results, key=lambda x: _drawing_sort_key(x.get("drawing_no", ""))), 1):
-        ok = r.get("status") == "ОК"
+        ok = r.get("status") in ("ОК", "⚠ проверить длину")
         row = [i, r.get("drawing_no", ""), r.get("part_name", ""),
                _zagotovka(r) if ok else "", _size(r) if ok else "",
                _mass(r.get("stock_mass_kg")) if ok else "",

@@ -31,6 +31,8 @@ from core.engine import (
 # Сам engine.py при этом не изменён.
 from core.stock_ext import calculate_stock_line as calculate_missing_stock_line
 from core import cdw_bridge
+from core import cdw_dims
+from core import settings
 from core import drawing_db
 from core.drawing_db import build_etalon_examples_block, lookup_etalon
 from core.gost_reader import get_gost_context_for_query
@@ -375,6 +377,23 @@ def _sortament_from_library(card: dict) -> str:
     return ""
 
 
+def _propose_from_dims(cdw_path: str, card: dict):
+    """Предложение длины заготовки по размерам чертежа и массе. None, если
+    сортамент в штампе не линейный или размеров нет."""
+    try:
+        sec = cdw_dims.parse_section(card.get("material") or "")
+        if sec is None:
+            return None
+        dens = card.get("density") or 7850.0
+        return cdw_dims.propose_length(
+            sec, cdw_dims.dimension_values(cdw_path),
+            card.get("mass") or 0.0, float(dens),
+            float(settings.load_settings().get("stock_allowance_mm", cdw_dims.DEFAULT_ALLOWANCE_MM)))
+    except Exception as e:                                    # noqa: BLE001
+        logger.warn(f"Размеры из CDW не прочитаны: {e}")
+        return None
+
+
 def process_one_cdw(cdw_path: str) -> dict:
     """
     Чертёж КОМПАС читается структурно: обозначение, наименование,
@@ -445,6 +464,19 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["source"] = "CDW"
             return result
         if not ex.length_mm or ex.length_mm <= 0:
+            prop = _propose_from_dims(cdw_path, card)
+            if prop is not None and prop.blank_length_mm:
+                sec = cdw_dims.parse_section(card.get("material") or "")
+                result["status"] = "⚠ проверить длину"
+                result["new_sortament"] = (card.get("material") or "").split(";")[0].strip()
+                result["zagotovka_full"] = result["new_sortament"]
+                result["stock_size"] = f"{sec.kind} {'х'.join(f'{v:g}' for v in sec.sizes)}, L={prop.blank_length_mm:g}"
+                result["stock_mass_kg"] = _fmt_mass_ru(round(prop.blank_mass_kg, 2))
+                result["error"] = (f"Длина предложена по размерам чертежа ({prop.confidence} уверенность): "
+                                   f"деталь {prop.part_length_mm:g} мм + припуск. {prop.note}").strip()
+                result["source"] = "CDW+размеры"
+                _register_case(cdw_path, ex, result, result["error"])
+                return result
             # Паспортные данные всё равно годные — отдаём их, отметив пробел
             result["status"] = "⚠ нет длины"
             mat0 = (card.get("material") or "").split(";")[0].strip()

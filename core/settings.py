@@ -44,6 +44,7 @@ DEFAULTS = {
     # Режим расчёта: formulas_first (сначала формулы, ИИ только при неудаче)
     # или ai_first (сначала подбор по похожим чертежам, нужен интернет)
     "calc_mode":           "formulas_first",
+    "stock_allowance_mm":  10,
     "ui_theme":            "Тёмная",
     # Язык
     "language":            "Русский",
