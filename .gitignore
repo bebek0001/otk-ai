@@ -41,3 +41,9 @@ project.zip
 *.bak
 *.bak_*
 !seed/drawing_db.json
+
+processing_log/
+assistant/
+backups/
+recovered_etalons_*.json
+*.patch
