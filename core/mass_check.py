@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-MIN_RATIO = 0.97      # ниже: заготовка легче детали (с допуском на округление)
+MIN_RATIO = 1.005     # ниже: заготовка не тяжелее детали — так не бывает (на эталонах минимум 1,01)
 MAX_RATIO = 10.0      # выше: слишком много металла, вероятна ошибка типа/размера
 
 
@@ -34,7 +34,7 @@ def check(blank_mass, clean_mass) -> Tuple[bool, str]:
         return True, ""
     ratio = b / c
     if ratio < MIN_RATIO:
-        return False, (f"масса заготовки {b:g} кг меньше массы детали {c:g} кг: "
+        return False, (f"масса заготовки {b:g} кг не больше массы детали {c:g} кг: "
                        f"вероятно неверно определены тип или размер заготовки")
     if ratio > MAX_RATIO:
         return False, (f"масса заготовки {b:g} кг больше массы детали {c:g} кг в {ratio:.1f} раза: "

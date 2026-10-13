@@ -590,7 +590,7 @@ def process_one_pdf_with_ai(pdf_path: str) -> dict:
 
 def process_one_cdw_with_ai(cdw_path: str) -> dict:
     result = process_one_cdw(cdw_path)
-    if result["status"] == "ОК":
+    if result["status"] in ("ОК", STATUS_ASSEMBLY):
         return result
 
     try:
@@ -636,6 +636,16 @@ def _apply_ai(result: dict, ex, text_block: str, fname: str) -> None:
                                             mass      = line.split(":", 1)[1].strip()
         elif low.startswith("сортамент:"):  sortament = line.split(":", 1)[1].strip()
 
+    # Страховка: ИИ видит только текст штампа, габаритов у него нет, поэтому
+    # размеры он по сути придумывает. Ответ принимается как подсказка, только
+    # если масса заготовки правдоподобна относительно массы детали; иначе
+    # он отбрасывается и позиция остаётся с исходной ошибкой.
+    ai_mass = re.sub(r"[^\d,\.]", "", mass)
+    ok_mass, why = mass_check.check(ai_mass, result.get("clean_mass_kg"))
+    if not ai_mass or not ok_mass:
+        logger.info(f"ИИ: ответ отброшен ({fname}): {why or 'нет массы'}")
+        return
+
     if zagotovka:
         result["new_sortament"]  = sortament or zagotovka
         result["stock_size"]     = size
@@ -645,8 +655,8 @@ def _apply_ai(result: dict, ex, text_block: str, fname: str) -> None:
         result["zagotovka_full"] = answer.strip()[:120]
 
     result["source"] = "ИИ"
-    result["status"] = "ОК"
-    result["error"]  = ""
+    result["status"] = "⚠ ИИ: проверить"
+    result["error"]  = "Предположение ИИ: габариты не подтверждены чертежом"
     logger.info(f"ИИ: {fname} → {result['zagotovka_full'][:50]}")
 
 
