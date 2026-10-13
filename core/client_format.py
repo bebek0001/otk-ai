@@ -58,6 +58,7 @@ def _drawing_sort_key(drawing_no: str):
 def rows_for_client(results: List[Dict[str, Any]], include_errors: bool = True):
     """Строки таблицы. Позиции с ошибкой остаются в таблице с пустой заготовкой."""
     rows = []
+    results = [r for r in results if r.get("status") != "Сборка (пропуск)"]
     for i, r in enumerate(sorted(results, key=lambda x: _drawing_sort_key(x.get("drawing_no", ""))), 1):
         ok = r.get("status") == "ОК"
         row = [i, r.get("drawing_no", ""), r.get("part_name", ""),

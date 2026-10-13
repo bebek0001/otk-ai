@@ -353,6 +353,16 @@ _STOCK_WORDS = (
 )
 
 
+STATUS_ASSEMBLY = "Сборка (пропуск)"
+
+
+def is_assembly(marking: str, name: str) -> bool:
+    m = (marking or "").strip().upper()
+    n = (name or "").lower()
+    return (m.endswith(" СБ") or "сборочный чертеж" in n
+            or "сборочный чертёж" in n)
+
+
 def _sortament_from_library(card: dict) -> str:
     """
     Если деталь вставлена из библиотеки проката, сортамент лежит
@@ -382,6 +392,12 @@ def process_one_cdw(cdw_path: str) -> dict:
         result["part_name"]     = card.get("name", "") or os.path.splitext(name)[0]
         result["material"]      = card.get("material", "")
         result["clean_mass_kg"] = _fmt_mass_ru(card.get("mass"))
+
+        if is_assembly(card.get("marking", ""), card.get("name", "")):
+            result["status"] = STATUS_ASSEMBLY
+            result["error"]  = "Сборочный чертёж: заготовка не рассчитывается"
+            result["source"] = "CDW"
+            return result
 
         lib = _sortament_from_library(card)
         if lib:
@@ -431,8 +447,13 @@ def process_one_cdw(cdw_path: str) -> dict:
         if not ex.length_mm or ex.length_mm <= 0:
             # Паспортные данные всё равно годные — отдаём их, отметив пробел
             result["status"] = "⚠ нет длины"
-            result["error"]  = ("Размеры не параметризованы в чертеже — "
-                                "длина заготовки не определена")
+            mat0 = (card.get("material") or "").split(";")[0].strip()
+            if mat0.split(" ")[0].lower() in _STOCK_WORDS + ("профиль",):
+                result["error"] = (f"В штампе указан сортамент «{mat0}»; "
+                                   "габариты заготовки в файле не заданы")
+            else:
+                result["error"] = ("Размеры не параметризованы в чертеже — "
+                                   "длина заготовки не определена")
             result["source"] = "CDW"
             return result
 
@@ -708,6 +729,7 @@ def scan_folder(folder: str) -> list:
 # ============================================================
 
 def export_to_excel(results: list, save_path: str) -> None:
+    results = [r for r in results if r.get("status") != STATUS_ASSEMBLY]
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
