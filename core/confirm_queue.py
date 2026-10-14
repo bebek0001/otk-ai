@@ -49,7 +49,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from core import logger
+from core import fsutil, logger
 from core.paths import CONFIRM_QUEUE_PATH
 from core import drawing_db
 
@@ -74,8 +74,7 @@ def load_queue() -> List[Dict[str, Any]]:
 
 def _save_queue(items: List[Dict[str, Any]]) -> None:
     try:
-        with open(QUEUE_PATH, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
+        fsutil.write_json_atomic(QUEUE_PATH, items)
     except Exception as e:                                    # noqa: BLE001
         logger.error(f"Ошибка сохранения очереди подтверждения: {e}")
         raise

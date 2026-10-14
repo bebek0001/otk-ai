@@ -35,6 +35,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from core import logger
+from core import fsutil
 
 
 from core.paths import DB_PATH as USER_DB_PATH
@@ -59,8 +60,7 @@ def _install_seed() -> None:
             seed_data = json.load(f)
         if not isinstance(seed_data, list):
             return
-        with open(DB_PATH, "w", encoding="utf-8") as f:
-            json.dump(seed_data, f, ensure_ascii=False, indent=2)
+        fsutil.write_json_atomic(DB_PATH, seed_data)
         logger.info(
             f"Установлена эталонная база из комплекта поставки: "
             f"{len(seed_data)} записей → {DB_PATH}"
@@ -119,14 +119,14 @@ def load_db() -> List[Dict[str, Any]]:
             return data
         return []
     except Exception as e:
-        logger.warn(f"Ошибка загрузки базы чертежей: {e}")
+        kept = fsutil.quarantine_corrupt(DB_PATH)
+        logger.warn(f"Ошибка загрузки базы чертежей: {e}. Копия повреждённого файла: {kept}")
         return []
 
 
 def save_db(records: List[Dict[str, Any]]) -> None:
     try:
-        with open(DB_PATH, "w", encoding="utf-8") as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
+        fsutil.write_json_atomic(DB_PATH, records)
         logger.info(f"База чертежей сохранена: {len(records)} записей → {DB_PATH}")
     except Exception as e:
         logger.error(f"Ошибка сохранения базы чертежей: {e}")

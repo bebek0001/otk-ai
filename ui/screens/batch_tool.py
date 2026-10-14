@@ -1312,7 +1312,15 @@ class BatchToolScreen(ctk.CTkFrame):
                 self.after(0, self.lbl_status.configure,
                            {"text": f"Обработка {i + 1}/{total}: {os.path.basename(path)}"})
                 self.after(0, self.progress.set, i / total)
-                self._results.append(process_one_file(path, use_ai=use_ai))
+                try:
+                    self._results.append(process_one_file(path, use_ai=use_ai))
+                except Exception as e:                          # noqa: BLE001
+                    # Один сбойный файл не должен подвешивать всю обработку:
+                    # строка с ошибкой, дальше идём по списку.
+                    logger.error(f"Пакетная обработка: необработанная ошибка {path}: {e}")
+                    r = _blank_result(path)
+                    r["status"], r["error"] = "❌ ошибка", str(e)[:120]
+                    self._results.append(r)
 
             saved_path = ""
             save_report = ""
@@ -1338,7 +1346,9 @@ class BatchToolScreen(ctk.CTkFrame):
                 self.btn_run.configure(state="normal", text="Запустить обработку")
                 self.btn_add.configure(state="normal")
                 self.btn_folder_run.configure(state="normal")
-                if ok > 0:
+                # Выгрузка нужна и когда нет ни одной строки «ОК»: по ТЗ работа
+                # завершается таблицей даже при ошибках.
+                if self._results:
                     self.btn_export.configure(state="normal")
                 self._processing = False
                 logger.info(f"Пакетная обработка завершена: {ok}/{len(self._results)} ОК")

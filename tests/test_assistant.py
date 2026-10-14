@@ -134,3 +134,14 @@ def test_cdw_dims_sections_and_proposal():
     big = D.parse_section("Круг 220 ГОСТ 2590-2006")
     p2 = D.propose_length(big, [110.0, 20.0], 5.64, 7850.0)
     assert p2.part_length_mm != 110.0
+
+
+def test_atomic_json_and_corrupt_quarantine(tmp_path):
+    from core import fsutil
+    p = tmp_path / "db.json"
+    fsutil.write_json_atomic(p, [{"a": 1}])
+    assert p.read_text(encoding="utf-8").startswith("[")
+    assert not (tmp_path / "db.json.tmp").exists()
+    p.write_text("{битый", encoding="utf-8")
+    kept = fsutil.quarantine_corrupt(p)
+    assert kept and "corrupt" in kept and open(kept, encoding="utf-8").read() == "{битый"

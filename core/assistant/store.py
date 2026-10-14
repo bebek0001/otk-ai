@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List
 
-from core import logger
+from core import fsutil, logger
 from core.paths import ASSISTANT_DIR
 
 
@@ -30,8 +30,7 @@ def _load(name: str) -> List[Dict[str, Any]]:
 
 def _save(name: str, items: List[Dict[str, Any]]) -> None:
     _ensure()
-    (ASSISTANT_DIR / name).write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    fsutil.write_json_atomic(ASSISTANT_DIR / name, items)
 
 
 # ---------- решения технолога (обучающие примеры) ----------
