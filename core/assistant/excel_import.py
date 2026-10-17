@@ -24,7 +24,7 @@ _COLS = {
     "len":   ("длина",),
     "stock": ("сортамент", "заготовка"),
     "size":  ("размер",),
-    "mass":  ("масса заг",),
+    "mass":  ("масса заг", "вес заг"),
     "clean": ("масса чист",),
     "err":   ("ошибка",),
 }
@@ -54,13 +54,20 @@ def _norm_header(h: Any) -> str:
     return re.sub(r"\s+", " ", str(h or "")).strip().lower()
 
 
+# Колонки, которые технолог мог добавить справа своим блоком ответов: если
+# заголовок встречается дважды (колонка программы и колонка технолога),
+# берётся ПОСЛЕДНЯЯ, то есть исправленная.
+_LAST_WINS = ("stock", "size", "mass")
+
+
 def _find_cols(header: List[str]) -> Dict[str, int]:
     found: Dict[str, int] = {}
     for i, h in enumerate(header):
         hl = _norm_header(h)
         for key, subs in _COLS.items():
-            if key not in found and any(s in hl for s in subs):
-                found[key] = i
+            if any(s in hl for s in subs):
+                if key not in found or key in _LAST_WINS:
+                    found[key] = i
                 break
     return found
 
@@ -142,6 +149,9 @@ def import_corrected_excel(path: str) -> Tuple[int, int, int]:
         for r in rows[hdr_i + 1:]:
             get = lambda k: (r[cols[k]] if k in cols and cols[k] < len(r) else None)
             stock_cell = str(get("stock") or "")
+            if stock_cell.strip().lower() in ("убрать", "убрать."):
+                skipped += 1            # технолог убрал позицию (сборка и т.п.)
+                continue
             st = stock_type_from_text(stock_cell)
             name = str(get("name") or "").strip()
             if not st or not name:

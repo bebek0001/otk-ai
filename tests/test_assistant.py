@@ -258,3 +258,25 @@ def test_export_stamp_sortament_without_size():
     row = cf.rows_for_client([r])[0]
     assert row[3] == "Лист 6 ГОСТ 19903-2015/ 12Х18Н10Т ГОСТ 7350-77"
     assert row[4] == "" and row[7] == "габариты не заданы"
+
+
+def test_import_takes_technologist_block_when_headers_repeat(tmp_path, monkeypatch):
+    """В таблице технолога колонки программы (D-E) и его ответы (K-L) названы одинаково:
+    берётся правый блок. Строка «Убрать» пропускается."""
+    from core import drawing_db
+    from core.assistant import store as st
+    from openpyxl import Workbook
+    monkeypatch.setattr(st, "ASSISTANT_DIR", tmp_path / "a")
+    monkeypatch.setattr(drawing_db, "DB_PATH", str(tmp_path / "db.json"))
+    monkeypatch.setattr(drawing_db, "SEED_DB_PATH", tmp_path / "no_seed.json")
+    wb = Workbook(); ws = wb.active
+    ws.append(["№", "№ чертежа", "Наименование", "Сортамент", "Размер заготовки",
+               "Масса заг., кг", "Масса чист., кг", "", "Сортамент", "Размеры Заг", "Вес Заг"])
+    ws.append([1, "1.1", "Нож", "Лист 2000x1000 ГОСТ 19903-74", "BхL=2000х1000", "196,00", "5,04", "",
+               "Лист 6 ГОСТ 19903-2015/ 12Х18Н10Т ГОСТ 7350-77", "HxL=140x765", 5.07654])
+    ws.append([2, "1.2", "Корпус СБ", "Лист 1", "x", "1", "1", "", "Убрать", None, None])
+    p = tmp_path / "t.xlsx"; wb.save(p)
+    added, skipped, etalons = excel_import.import_corrected_excel(str(p))
+    assert (added, skipped, etalons) == (1, 1, 1)
+    r = drawing_db.lookup_by_drawing_no("1.1")
+    assert r["result_line"].splitlines()[1].rstrip(";") == "HxL=140x765" and r["d_blank_std_mm"] == 6
