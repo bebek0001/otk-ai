@@ -13,12 +13,11 @@ def recalc_with_type(source_file: str, stock_type: str) -> Dict[str, Any]:
     """Пересчитывает файл так, будто движок сам определил указанный тип.
     Размер и массу считают прежние формулы по ГОСТ."""
     from ui.screens.batch_tool import process_one_file   # отложенный импорт
-    prev = engine.FORCED_STOCK_TYPE
-    engine.FORCED_STOCK_TYPE = stock_type
+    prev = engine.set_forced_stock_type(stock_type)      # только для этого потока
     try:
         res = process_one_file(source_file)
     finally:
-        engine.FORCED_STOCK_TYPE = prev
+        engine.set_forced_stock_type(prev)
     return res
 
 

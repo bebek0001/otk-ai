@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import threading
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from core.m3d_reader import read_m3d, M3DInfo
@@ -184,7 +185,7 @@ class M3DOnlyToolScreen(ctk.CTkFrame):
             err = str(e)
         else:
             err = ""
-        self.after(0, self._apply_result, info, err)
+        thread_bridge.post(self._apply_result, info, err)
 
     def _apply_result(self, info: M3DInfo | None, err: str):
         self.info = info

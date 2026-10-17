@@ -2,6 +2,7 @@ import os
 import re
 import threading
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from core.settings import load_settings
@@ -416,7 +417,7 @@ class Model3DToolScreen(ctk.CTkFrame):
                 self.txt_prot.insert("1.0", "\n\n".join(parts))
                 self.txt_prot.yview_moveto(0.0)
 
-            self.after(0, ui)
+            thread_bridge.post(ui)
 
         threading.Thread(target=worker, daemon=True).start()
 

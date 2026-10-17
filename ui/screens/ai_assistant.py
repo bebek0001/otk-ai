@@ -5,6 +5,7 @@
 import os
 import threading
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog
 
 from core.engine import (
@@ -409,7 +410,7 @@ class AIAssistantScreen(ctk.CTkFrame):
                 self.btn_send.configure(state="normal", text="Отправить")
                 self._thinking = False
 
-            self.after(0, ui)
+            thread_bridge.post(ui)
 
         threading.Thread(target=worker, daemon=True).start()
 

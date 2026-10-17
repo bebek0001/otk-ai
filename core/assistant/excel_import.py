@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Импорт исправленного Excel: строки "деталь -> правильный сортамент" становятся
-обучающими примерами. Колонки ищутся по заголовкам; формат клиента уточняется.
+Импорт исправленного Excel технолога.
+
+Каждая строка «деталь -> правильная заготовка» делает две вещи:
+  1) пополняет обучающую выборку помощника (тип заготовки);
+  2) если есть номер чертежа, записывается эталоном в базу, чтобы при
+     следующей обработке этой детали программа выдала ответ технолога.
+
+Колонки ищутся по заголовкам (формат клиента и старая выгрузка).
 """
 
 from __future__ import annotations
@@ -13,11 +19,19 @@ from core.assistant import store
 
 _COLS = {
     "name":  ("наименование", "название", "деталь"),
-    "no":    ("обозначение", "номер чертеж", "децимальн"),
+    "no":    ("обозначение", "номер чертеж", "№ чертежа", "децимальн"),
     "mat":   ("материал",),
     "len":   ("длина",),
     "stock": ("сортамент", "заготовка"),
+    "size":  ("размер",),
+    "mass":  ("масса заг",),
+    "clean": ("масса чист",),
+    "err":   ("ошибка",),
 }
+
+# Строки, где программа лишь предложила значение, а технолог не снял пометку,
+# в базу не попадают: непроверенное предположение не должно стать эталоном.
+_UNCONFIRMED_MARKS = ("длина предложена", "предположение ии")
 
 
 def stock_type_from_text(text: str) -> Optional[str]:
@@ -36,21 +50,85 @@ def stock_type_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _norm_header(h: Any) -> str:
+    return re.sub(r"\s+", " ", str(h or "")).strip().lower()
+
+
 def _find_cols(header: List[str]) -> Dict[str, int]:
     found: Dict[str, int] = {}
     for i, h in enumerate(header):
-        hl = (h or "").lower()
+        hl = _norm_header(h)
         for key, subs in _COLS.items():
             if key not in found and any(s in hl for s in subs):
                 found[key] = i
+                break
     return found
 
 
-def import_corrected_excel(path: str) -> Tuple[int, int]:
-    """Возвращает (добавлено решений, пропущено строк)."""
+def _num(v) -> Optional[float]:
+    if v in (None, ""):
+        return None
+    try:
+        x = float(str(v).replace(",", ".").replace("\xa0", "").replace(" ", ""))
+    except ValueError:
+        return None
+    return x if x > 0 else None
+
+
+def _fmt_ru(x: float) -> str:
+    return f"{x:.2f}".replace(".", ",")
+
+
+def build_etalon(drawing_no: str, name: str, stock_cell: str, size_cell: str,
+                 mass_stock, mass_clean, material_fallback: str = "") -> Optional[Dict[str, Any]]:
+    """Эталон из строки таблицы технолога. None, если тип заготовки не распознан."""
+    stock_type = stock_type_from_text(stock_cell)
+    if not stock_type or not drawing_no:
+        return None
+    sort_part, _, mat_part = (stock_cell or "").partition("/")
+    sort_part = sort_part.strip().rstrip(";")
+    material = (mat_part or material_fallback or "").strip()
+    gost_m = re.search(r"ГОСТ\s*[\d\-–]+", sort_part, re.I)
+    gost_stock = re.sub(r"\s+", "", gost_m.group(0)) if gost_m else ""
+    d_m = re.search(r"(?:круг|квадрат|шестигранник|лист|полоса|труба|уголок|профиль)\s+(\d+(?:[.,]\d+)?)",
+                    sort_part, re.I)
+    d_blank = int(float(d_m.group(1).replace(",", "."))) if d_m else 0
+    size_txt = (size_cell or "").strip()
+    l_m = re.search(r"L\s*=\s*(\d+(?:[.,]\d+)?)", size_txt)
+    if l_m:
+        l_blank = float(l_m.group(1).replace(",", "."))
+    else:
+        dims = [float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", size_txt.split(",")[-1])]
+        l_blank = max(dims) if dims else 0.0
+    mark_m = re.match(r"\s*(.+?)\s+(ГОСТ\s*[\d\-–]+|ТУ\s*[\d\.\-]+)", material, re.I)
+    mat_mark = mark_m.group(1).strip() if mark_m else material
+    mat_gost = re.sub(r"\s+", "", mark_m.group(2)) if mark_m else ""
+    mb = _num(mass_stock)
+    mc = _num(mass_clean)
+    result_line = f"{sort_part};\n{size_txt};\nМасса заготовки, кг: {_fmt_ru(mb) if mb else ''}"
+    return {
+        "drawing_no": drawing_no.strip(),
+        "part_name": (name or "").strip(),
+        "stock_type": stock_type,
+        "gost_stock": gost_stock,
+        "d_blank_std_mm": d_blank,
+        "l_part_mm": l_blank,          # длина детали в таблице технолога не указана
+        "l_blank_mm": l_blank,
+        "material_mark": mat_mark,
+        "material_gost": mat_gost,
+        "mass_kg": round(mb, 3) if mb else 0.0,
+        "mass_clean_kg": round(mc, 3) if mc else None,
+        "result_line": result_line,
+        "source": "excel_import",
+    }
+
+
+def import_corrected_excel(path: str) -> Tuple[int, int, int]:
+    """Возвращает (добавлено решений, пропущено строк, записано эталонов)."""
     from openpyxl import load_workbook
+    from core import drawing_db
     wb = load_workbook(path, read_only=True, data_only=True)
-    added = skipped = 0
+    added = skipped = etalons = 0
     for ws in wb.worksheets:
         rows = list(ws.iter_rows(values_only=True))
         hdr_i, cols = None, {}
@@ -63,18 +141,26 @@ def import_corrected_excel(path: str) -> Tuple[int, int]:
             continue
         for r in rows[hdr_i + 1:]:
             get = lambda k: (r[cols[k]] if k in cols and cols[k] < len(r) else None)
-            st = stock_type_from_text(str(get("stock") or ""))
+            stock_cell = str(get("stock") or "")
+            st = stock_type_from_text(stock_cell)
             name = str(get("name") or "").strip()
             if not st or not name:
                 skipped += 1
                 continue
-            ln = get("len")
-            try:
-                ln = float(str(ln).replace(",", ".")) if ln not in (None, "") else None
-            except ValueError:
-                ln = None
+            if str(get("err") or "").strip().lower().startswith(_UNCONFIRMED_MARKS):
+                skipped += 1
+                continue
+            ln = _num(get("len"))
+            drawing_no = str(get("no") or "").strip()
             store.add_decision(name, str(get("mat") or ""), ln, st,
-                               drawing_no=str(get("no") or "").strip(),
-                               source="excel_import")
+                               drawing_no=drawing_no, source="excel_import")
             added += 1
-    return added, skipped
+            et = build_etalon(drawing_no, name, stock_cell, str(get("size") or ""),
+                              get("mass"), get("clean"), str(get("mat") or ""))
+            if et:
+                try:
+                    drawing_db.upsert_by_drawing_no(et)
+                    etalons += 1
+                except Exception:                              # noqa: BLE001
+                    pass
+    return added, skipped, etalons

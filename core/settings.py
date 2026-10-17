@@ -45,6 +45,8 @@ DEFAULTS = {
     # или ai_first (сначала подбор по похожим чертежам, нужен интернет)
     "calc_mode":           "formulas_first",
     "stock_allowance_mm":  10,
+    # Столбец «Ошибка» в Excel (1/0). PLM добавляет его сам; для себя удобно оставить
+    "excel_with_errors":   1,
     "ui_theme":            "Тёмная",
     # Язык
     "language":            "Русский",

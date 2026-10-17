@@ -2,6 +2,7 @@ import os
 import re
 import threading
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from core.engine import (
@@ -500,7 +501,7 @@ class DrawingToolScreen(ctk.CTkFrame):
                 self.txt_protocol.see("end")
                 self.btn_ai.configure(state="normal")
 
-            self.after(0, ui_update)
+            thread_bridge.post(ui_update)
 
         threading.Thread(target=worker, daemon=True).start()
 

@@ -20,6 +20,7 @@ import os
 import tempfile
 import threading
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from integrations.kompas.connector import connect, is_available, ConnectionStatus
@@ -186,7 +187,7 @@ class KompasToolScreen(ctk.CTkFrame):
             report = generate_report()
         except Exception as e:                             # noqa: BLE001
             report = f"Не удалось получить диагностику: {e}"
-        self.after(0, self._apply_probe_result, report)
+        thread_bridge.post(self._apply_probe_result, report)
 
     def _apply_probe_result(self, report: str):
         self._probe_btn.configure(state="normal", text="Считать диагностику")
@@ -206,7 +207,7 @@ class KompasToolScreen(ctk.CTkFrame):
             error_text = f"Непредвиденная ошибка: {e}"
         else:
             error_text = ""
-        self.after(0, self._apply_read_result, result, error_text)
+        thread_bridge.post(self._apply_read_result, result, error_text)
 
     def _apply_read_result(self, result, error_text: str):
         self._read_btn.configure(state="normal", text="Прочитать активную деталь")
@@ -262,7 +263,7 @@ class KompasToolScreen(ctk.CTkFrame):
         except Exception as e:                                # noqa: BLE001
             logger.error(f"3D просмотр: ошибка тесселяции {os.path.basename(path)}", e)
             mesh = None
-        self.after(0, self._apply_step_mesh, path, mesh)
+        thread_bridge.post(self._apply_step_mesh, path, mesh)
 
     def _apply_step_mesh(self, path: str, mesh):
         if mesh is None:
@@ -322,20 +323,20 @@ class KompasToolScreen(ctk.CTkFrame):
     def _live_pull_worker(self, manual: bool):
         export_result = export_active_to_step(_LIVE_STEP_PATH)
         if not export_result.ok:
-            self.after(0, self._apply_live_pull_result, None, export_result.error, manual)
+            thread_bridge.post(self._apply_live_pull_result, None, export_result.error, manual)
             return
         try:
             mesh = tessellate_step(_LIVE_STEP_PATH)
         except Exception as e:                                # noqa: BLE001
-            self.after(0, self._apply_live_pull_result, None,
+            thread_bridge.post(self._apply_live_pull_result, None,
                        f"Модель экспортирована, но не удалось построить сетку: {e}", manual)
             return
         if mesh is None:
-            self.after(0, self._apply_live_pull_result, None,
+            thread_bridge.post(self._apply_live_pull_result, None,
                        "Модель экспортирована, но в ней не нашлось геометрии для показа.",
                        manual)
             return
-        self.after(0, self._apply_live_pull_result, mesh, "", manual)
+        thread_bridge.post(self._apply_live_pull_result, mesh, "", manual)
 
     def _apply_live_pull_result(self, mesh, error: str, manual: bool):
         self._live_pull_busy = False
@@ -367,7 +368,7 @@ class KompasToolScreen(ctk.CTkFrame):
         status = connect() if is_available() else ConnectionStatus(
             False, error="Доступно только в Windows-сборке"
         )
-        self.after(0, self._apply_status, status)
+        thread_bridge.post(self._apply_status, status)
 
     def _apply_status(self, status: ConnectionStatus):
         self.status = status

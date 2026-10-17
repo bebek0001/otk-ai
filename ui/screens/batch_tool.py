@@ -18,6 +18,7 @@ import re
 import threading
 import datetime
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from core.engine import (
@@ -32,6 +33,7 @@ from core.engine import (
 from core.stock_ext import calculate_stock_line as calculate_missing_stock_line
 from core import cdw_bridge
 from core import cdw_dims
+from core import client_format
 from core import settings
 from core import drawing_db
 from core.drawing_db import build_etalon_examples_block, lookup_etalon
@@ -770,6 +772,13 @@ def scan_folder(folder: str) -> list:
 # Экспорт в Excel
 # ============================================================
 
+def _export_client(results: list, save_path: str) -> None:
+    """Таблица в формате заказчика. Столбец «Ошибка» включается настройкой
+    excel_with_errors (по умолчанию да; для передачи в PLM его можно отключить)."""
+    with_err = str(settings.load_settings().get("excel_with_errors", "1")) not in ("0", "False", "false", "")
+    client_format.export_client_xlsx(results, save_path, include_errors=with_err)
+
+
 def export_to_excel(results: list, save_path: str) -> None:
     results = [r for r in results if r.get("status") != STATUS_ASSEMBLY]
     try:
@@ -1309,9 +1318,9 @@ class BatchToolScreen(ctk.CTkFrame):
         def worker():
             total = len(files)
             for i, path in enumerate(files):
-                self.after(0, self.lbl_status.configure,
+                thread_bridge.post(self.lbl_status.configure,
                            {"text": f"Обработка {i + 1}/{total}: {os.path.basename(path)}"})
-                self.after(0, self.progress.set, i / total)
+                thread_bridge.post(self.progress.set, i / total)
                 try:
                     self._results.append(process_one_file(path, use_ai=use_ai))
                 except Exception as e:                          # noqa: BLE001
@@ -1357,7 +1366,7 @@ class BatchToolScreen(ctk.CTkFrame):
                         "Папка обработана",
                         f"Таблица сохранена:\n{saved_path}\n\n{save_report}")
 
-            self.after(0, finish)
+            thread_bridge.post(finish)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1374,7 +1383,7 @@ class BatchToolScreen(ctk.CTkFrame):
             log_path = os.path.join(f_out, f"OTK_протокол_{stamp}_{suffix}.txt")
             suffix += 1
 
-        export_to_excel(self._results, xlsx)
+        _export_client(self._results, xlsx)
         write_run_log(self._results, log_path, f_in)
         return xlsx, "Исходные чертежи сохранены без изменений"
 
@@ -1450,7 +1459,7 @@ class BatchToolScreen(ctk.CTkFrame):
         if not path:
             return
         try:
-            export_to_excel(self._results, path)
+            _export_client(self._results, path)
             messagebox.showinfo("Сохранено",
                                 f"Файл сохранён:\n{path}\n\nЗаписей: {len(self._results)}")
             logger.info(f"Экспорт в Excel: {path}")

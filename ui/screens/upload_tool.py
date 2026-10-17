@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import threading
 import customtkinter as ctk
+from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from ui.screens.batch_tool import (
@@ -174,8 +175,8 @@ class UploadToolScreen(ctk.CTkFrame):
                      "error": str(e)[:120], "part_name": "", "drawing_no": "",
                      "source": "", "zagotovka_full": ""}
             results.append(r)
-            self.after(0, self._progress, i, len(paths))
-        self.after(0, self._done, results)
+            thread_bridge.post(self._progress, i, len(paths))
+        thread_bridge.post(self._done, results)
 
     def _progress(self, done: int, total: int):
         self.lbl_drop.configure(text=f"Обрабатываю… {done}/{total}")

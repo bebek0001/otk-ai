@@ -1225,11 +1225,22 @@ def detect_sheet_size_from_stamp(pdf_text: str) -> Optional[float]:
 
 # Тип заготовки, выбранный технологом (помощник). None — определяет движок.
 FORCED_STOCK_TYPE: Optional[str] = None
+_forced_tls = threading.local()
+
+
+def set_forced_stock_type(value: Optional[str]) -> Optional[str]:
+    """Принудительный тип заготовки ТОЛЬКО для текущего потока (иначе
+    разбор позиции подменял бы тип у файлов, идущих в пакетной обработке).
+    Возвращает прежнее значение для восстановления."""
+    prev = getattr(_forced_tls, "value", None)
+    _forced_tls.value = value
+    return prev
 
 
 def detect_stock_type(ex: Extracted) -> str:
-    if FORCED_STOCK_TYPE:
-        return FORCED_STOCK_TYPE
+    forced = getattr(_forced_tls, "value", None) or FORCED_STOCK_TYPE
+    if forced:
+        return forced
     name_l = (ex.part_name or "").lower()
     text_l = (ex.pdf_text or "").lower()
 

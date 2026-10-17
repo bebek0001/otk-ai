@@ -47,3 +47,7 @@ assistant/
 backups/
 recovered_etalons_*.json
 *.patch
+
+*.seed_merged
+*.corrupt-*
+*.tmp

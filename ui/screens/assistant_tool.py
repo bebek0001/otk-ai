@@ -483,10 +483,11 @@ class AssistantScreen(ctk.CTkFrame):
         if not path:
             return
         try:
-            added, skipped = excel_import.import_corrected_excel(path)
+            added, skipped, etalons = excel_import.import_corrected_excel(path)
         except Exception as e:                                # noqa: BLE001
             messagebox.showerror("Импорт", f"Не удалось прочитать файл: {e}")
             return
-        messagebox.showinfo("Импорт", f"Добавлено примеров: {added}. Пропущено строк: {skipped}.\n"
+        messagebox.showinfo("Импорт", f"Добавлено примеров: {added}. Записано эталонов в базу: {etalons}. "
+                                      f"Пропущено строк: {skipped}.\n"
                                       "Нажмите «Обучить модель», чтобы учесть их.")
         self._refresh_training()

@@ -11,6 +11,7 @@ from ui.screens.confirm_queue_tool import ConfirmQueueScreen
 from ui.screens.upload_tool import UploadToolScreen
 from ui.screens.assistant_tool import AssistantScreen
 from core import logger
+from ui import thread_bridge
 
 
 # ============================================================
@@ -191,6 +192,7 @@ class Sidebar(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+        thread_bridge.install(self)
         self.title("OTK.AI")
         self.geometry("1280x780")
         self.minsize(1100, 680)

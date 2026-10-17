@@ -44,31 +44,6 @@ from core.paths import SEED_DB_PATH
 DB_PATH = str(USER_DB_PATH)
 
 
-def _install_seed() -> None:
-    """
-    Если у пользователя ещё нет своей базы чертежей — копирует туда
-    эталонную базу (seed/drawing_db.json), которая едет вместе с
-    установщиком/исходниками. Никогда не трогает уже существующую
-    пользовательскую базу — только разовая установка "из коробки".
-    """
-    if os.path.exists(DB_PATH):
-        return
-    try:
-        if not SEED_DB_PATH.exists():
-            return
-        with open(SEED_DB_PATH, "r", encoding="utf-8") as f:
-            seed_data = json.load(f)
-        if not isinstance(seed_data, list):
-            return
-        fsutil.write_json_atomic(DB_PATH, seed_data)
-        logger.info(
-            f"Установлена эталонная база из комплекта поставки: "
-            f"{len(seed_data)} записей → {DB_PATH}"
-        )
-    except Exception as e:
-        logger.warn(f"Не удалось установить эталонную базу из комплекта поставки: {e}")
-
-
 # ============================================================
 # УТИЛИТЫ
 # ============================================================
@@ -102,6 +77,79 @@ def _extract_drawing_no(pdf_text: str, part_name: str) -> str:
         if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", candidate):
             return candidate.strip()
     return part_name or ""
+
+
+# ============================================================
+# КОМПЛЕКТ ПОСТАВКИ (seed)
+# ============================================================
+
+_seed_checked = False
+
+
+def _seed_marker_path() -> str:
+    return str(DB_PATH) + ".seed_merged"
+
+
+def _read_seed() -> List[Dict[str, Any]]:
+    try:
+        if not SEED_DB_PATH.exists():
+            return []
+        with open(SEED_DB_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warn(f"Не удалось прочитать эталонную базу из комплекта поставки: {e}")
+        return []
+
+
+def _install_seed() -> None:
+    """
+    Эталонная база из комплекта поставки (seed/drawing_db.json).
+
+    Первый запуск: копируется в базу пользователя. Дальше при каждом запуске
+    программы в неё ДОБАВЛЯЮТСЯ новые записи из обновлённого комплекта
+    (по номеру чертежа и хэшу). Записи пользователя и исправления технолога
+    не заменяются, а записи, которые уже были добавлены и удалены вручную,
+    повторно не возвращаются (список учтённых записей лежит в .seed_merged).
+    """
+    global _seed_checked
+    if _seed_checked and os.path.exists(DB_PATH):
+        return
+    _seed_checked = True
+    try:
+        seed = _read_seed()
+        if not seed:
+            return
+        marker = _seed_marker_path()
+        if not os.path.exists(DB_PATH):
+            fsutil.write_json_atomic(DB_PATH, seed)
+            fsutil.write_json_atomic(marker, [r.get("pdf_text_hash") for r in seed])
+            logger.info(f"Установлена эталонная база из комплекта поставки: "
+                        f"{len(seed)} записей → {DB_PATH}")
+            return
+        done = set()
+        if os.path.exists(marker):
+            try:
+                with open(marker, "r", encoding="utf-8") as f:
+                    done = set(json.load(f))
+            except Exception:                                  # noqa: BLE001
+                done = set()
+        with open(DB_PATH, "r", encoding="utf-8") as f:
+            user = json.load(f)
+        if not isinstance(user, list):
+            return
+        have_no = {_normalize_drawing_no(r.get("drawing_no", "")) for r in user}
+        have_h = {r.get("pdf_text_hash") for r in user}
+        add = [r for r in seed
+               if r.get("pdf_text_hash") not in done
+               and r.get("pdf_text_hash") not in have_h
+               and _normalize_drawing_no(r.get("drawing_no", "")) not in have_no]
+        if add:
+            fsutil.write_json_atomic(DB_PATH, user + add)
+            logger.info(f"Из обновлённого комплекта добавлено эталонов: {len(add)}")
+        fsutil.write_json_atomic(marker, [r.get("pdf_text_hash") for r in seed])
+    except Exception as e:
+        logger.warn(f"Не удалось установить эталонную базу из комплекта поставки: {e}")
 
 
 # ============================================================
@@ -193,6 +241,25 @@ def save_etalon(
     save_db(records)
     logger.info(f"Эталон сохранён: {drawing_no} / {part_name} ({'обновлён' if updated else 'новый'})")
     return record
+
+
+def upsert_by_drawing_no(record: Dict[str, Any]) -> bool:
+    """Добавить или заменить запись по номеру чертежа (запись технолога
+    из исправленного Excel). True, если запись заменила существующую."""
+    key = _normalize_drawing_no(record.get("drawing_no", ""))
+    if not key:
+        raise ValueError("Нет номера чертежа")
+    record.setdefault("pdf_text_hash", f"excel:{key}")
+    record.setdefault("saved_at", datetime.now().isoformat(timespec="seconds"))
+    records = load_db()
+    for i, r in enumerate(records):
+        if _normalize_drawing_no(r.get("drawing_no", "")) == key:
+            records[i] = record
+            save_db(records)
+            return True
+    records.append(record)
+    save_db(records)
+    return False
 
 
 # ============================================================

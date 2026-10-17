@@ -145,3 +145,72 @@ def test_atomic_json_and_corrupt_quarantine(tmp_path):
     p.write_text("{битый", encoding="utf-8")
     kept = fsutil.quarantine_corrupt(p)
     assert kept and "corrupt" in kept and open(kept, encoding="utf-8").read() == "{битый"
+
+
+def test_import_excel_writes_etalon_and_decision(tmp_path, monkeypatch):
+    from core import drawing_db
+    from core.assistant import store as st
+    from openpyxl import Workbook
+    monkeypatch.setattr(st, "ASSISTANT_DIR", tmp_path / "a")
+    monkeypatch.setattr(drawing_db, "DB_PATH", str(tmp_path / "db.json"))
+    monkeypatch.setattr(drawing_db, "SEED_DB_PATH", tmp_path / "no_seed.json")
+    wb = Workbook(); ws = wb.active
+    ws.append(["№", "№ чертежа", "Наименование", "Заготовка", "Размер заготовки",
+               "Масса заг., кг", "Масса чист., кг"])
+    ws.append([1, "140826.00.00.001", "Штырь",
+               "Шестигранник 55 ГОСТ 2879-2006/ 12Х18Н10Т ГОСТ 5949-2018",
+               "Шестигранник 55, L=170", "3,5", "2,5"])
+    ws.append([2, "140826.00.00.099", "Прочее", "", "", "", "1,0"])     # без ответа: пропуск
+    p = tmp_path / "t.xlsx"; wb.save(p)
+    added, skipped, etalons = excel_import.import_corrected_excel(str(p))
+    assert (added, skipped, etalons) == (1, 1, 1)
+    r = drawing_db.lookup_by_drawing_no("140826.00.00.001")
+    assert r["stock_type"] == "Шестигранник" and r["l_blank_mm"] == 170.0
+    assert r["mass_kg"] == 3.5 and r["mass_clean_kg"] == 2.5
+    assert r["result_line"].splitlines()[0].rstrip(";") == "Шестигранник 55 ГОСТ 2879-2006"
+    # повторный импорт заменяет запись, а не дублирует
+    excel_import.import_corrected_excel(str(p))
+    assert len([x for x in drawing_db.load_db() if x["drawing_no"] == "140826.00.00.001"]) == 1
+
+
+def test_thread_bridge_runs_posted_calls():
+    from ui import thread_bridge
+    import threading
+    out = []
+    t = threading.Thread(target=lambda: thread_bridge.post(out.append, 7))
+    t.start(); t.join()
+    assert out == []                                  # из потока ничего не выполнилось
+    assert thread_bridge.drain_for_tests() == 1 and out == [7]
+
+
+def test_forced_type_is_thread_local():
+    import threading
+    from core import engine
+    seen = {}
+    engine.set_forced_stock_type("Швеллер")
+    try:
+        t = threading.Thread(target=lambda: seen.update(v=getattr(engine._forced_tls, "value", None)))
+        t.start(); t.join()
+        assert seen["v"] is None                      # другой поток тип не видит
+        assert getattr(engine._forced_tls, "value") == "Швеллер"
+    finally:
+        engine.set_forced_stock_type(None)
+
+
+def test_seed_merge_adds_new_records_only(tmp_path, monkeypatch):
+    import json
+    from core import drawing_db as db
+    seed = tmp_path / "seed.json"
+    user = tmp_path / "db.json"
+    monkeypatch.setattr(db, "SEED_DB_PATH", seed)
+    monkeypatch.setattr(db, "DB_PATH", str(user))
+    monkeypatch.setattr(db, "_seed_checked", False)
+    rec = lambda n, h: {"drawing_no": n, "pdf_text_hash": h, "part_name": n}
+    seed.write_text(json.dumps([rec("A.1", "h1")]), encoding="utf-8")
+    assert [r["drawing_no"] for r in db.load_db()] == ["A.1"]          # первый запуск
+    # пользователь удалил A.1 и добавил свою запись; в обновлении seed пришла A.2
+    user.write_text(json.dumps([rec("U.1", "hu")]), encoding="utf-8")
+    seed.write_text(json.dumps([rec("A.1", "h1"), rec("A.2", "h2")]), encoding="utf-8")
+    monkeypatch.setattr(db, "_seed_checked", False)
+    nums = sorted(r["drawing_no"] for r in db.load_db())
+    assert nums == ["A.2", "U.1"]                                      # A.1 не возвращается
