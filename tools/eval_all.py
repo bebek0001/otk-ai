@@ -15,7 +15,7 @@ def truth_len(size: str):
 
 def run(allowance: float):
     rows = []
-    for f in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "..", "data", "eval", "*.json"))):
+    for f in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "..", "data", "eval", "cdw_truth_*.json"))):
         rows += json.load(open(f, encoding="utf-8"))
     n = len(rows)
     stat = dict(n=n, stamp_has_sort=0, type_ok=0, type_by_stamp=0, type_by_model=0,

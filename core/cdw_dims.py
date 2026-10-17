@@ -42,6 +42,7 @@ MAX_LEN_MM = 12000.0
 DEFAULT_ALLOWANCE_MM = 10.0
 ROUND_TO_MM = 5.0
 HIGH_CONF_MAX_RATIO = 3.5   # выше: уверенность понижается до «низкой»
+MAX_BLANK_TO_CLEAN = 4.0    # заготовка тяжелее детали больше чем в 4 раза: длину не предлагаем
 
 # Типы с известным постоянным сечением: масса считается как сечение * длина
 LINEAR_TYPES = ("Круг", "Квадрат", "Шестигранник", "Труба", "Уголок", "Профиль")
@@ -207,7 +208,7 @@ def propose_length(section: Section, dims: List[float], clean_mass_kg: float,
     # не вылезает слишком сильно за чистую массу (иначе вариант нереалистичен)
     def plausible(c: float) -> bool:
         full = blank_mass_kg(section, c, density_kg_m3)
-        return full is not None and full <= clean_mass_kg * 6.0
+        return full is not None and full <= clean_mass_kg * MAX_BLANK_TO_CLEAN
 
     ok = [c for c in ok if plausible(c)]
     if not ok:
