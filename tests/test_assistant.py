@@ -214,3 +214,36 @@ def test_seed_merge_adds_new_records_only(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_seed_checked", False)
     nums = sorted(r["drawing_no"] for r in db.load_db())
     assert nums == ["A.2", "U.1"]                                      # A.1 не возвращается
+
+
+def test_agent_autonomy_is_earned(tmp_path, monkeypatch):
+    from core import agent
+    monkeypatch.setattr(agent, "AGENT_DIR", tmp_path)
+    assert agent.autonomy("formula_stamp") == "проверка"
+    for _ in range(30):
+        agent.record_outcome("formula_stamp", True)
+    assert agent.autonomy("formula_stamp") == "проверка"   # 30/30: нижняя граница ~0.89
+    for _ in range(50):
+        agent.record_outcome("formula_stamp", True)
+    assert agent.autonomy("formula_stamp") == "авто"
+    for _ in range(5):
+        agent.record_outcome("formula_stamp", False)
+    assert agent.autonomy("formula_stamp") == "проверка"
+    for _ in range(100):
+        agent.record_outcome("ai_guess", True)
+    assert agent.autonomy("ai_guess") == "проверка"      # ИИ никогда не авто
+
+
+def test_agent_learns_from_corrected_row(tmp_path, monkeypatch):
+    import json
+    from core import agent
+    monkeypatch.setattr(agent, "AGENT_DIR", tmp_path)
+    (tmp_path / "log").mkdir()
+    rec = {"drawing_no": "АБВ 1.2", "source": "CDW+расчёт",
+           "new_sortament": "Круг 40", "stock_size": "L=100"}
+    (tmp_path / "log" / "d.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+    ok = agent.learn_from_row("абв1.2", {"sortament": "Круг 40", "size": "L=100"}, tmp_path / "log")
+    assert ok is True
+    bad = agent.learn_from_row("АБВ 1.2", {"sortament": "Круг 45", "size": "L=100"}, tmp_path / "log")
+    assert bad is False
+    assert agent.load_stats()["formula_stamp"] == {"n": 2, "correct": 1}

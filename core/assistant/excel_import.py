@@ -155,6 +155,12 @@ def import_corrected_excel(path: str) -> Tuple[int, int, int]:
             store.add_decision(name, str(get("mat") or ""), ln, st,
                                drawing_no=drawing_no, source="excel_import")
             added += 1
+            try:
+                from core import agent
+                agent.learn_from_row(drawing_no, {"sortament": stock_cell,
+                                                  "size": str(get("size") or "")})
+            except Exception:                                  # noqa: BLE001
+                pass
             et = build_etalon(drawing_no, name, stock_cell, str(get("size") or ""),
                               get("mass"), get("clean"), str(get("mat") or ""))
             if et:

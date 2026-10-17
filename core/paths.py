@@ -72,3 +72,7 @@ GOSTS_DIR = PROJECT_ROOT / "gosts"
 
 # Помощник технолога: решения, версии модели, очередь позиций для разбора
 ASSISTANT_DIR = USER_DATA_DIR / "assistant"
+
+
+# Агент-технолог: статистика правил, журнал решений
+AGENT_DIR = USER_DATA_DIR / "agent"

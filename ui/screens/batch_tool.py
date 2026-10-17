@@ -721,6 +721,13 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
         result = process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
 
     raw_text = result.pop("_raw_text", "")
+    try:
+        from core import agent
+        dec = agent.decide(result)
+        result["agent_level"], result["agent_rule"] = dec["level"], dec["rule"]
+        agent.log_decision(result.get("drawing_no", ""), dec)
+    except Exception as e:                                      # noqa: BLE001
+        logger.warn(f"Агент: решение не принято: {e}")
     activity_log.log_processing(
         source_path=path,
         mode="batch",
