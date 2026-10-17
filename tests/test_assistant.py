@@ -247,3 +247,14 @@ def test_agent_learns_from_corrected_row(tmp_path, monkeypatch):
     bad = agent.learn_from_row("АБВ 1.2", {"sortament": "Круг 45", "size": "L=100"}, tmp_path / "log")
     assert bad is False
     assert agent.load_stats()["formula_stamp"] == {"n": 2, "correct": 1}
+
+
+def test_export_stamp_sortament_without_size():
+    from core import client_format as cf
+    r = {"drawing_no": "1.1", "part_name": "Нож", "status": "⚠ нет длины", "source": "CDW",
+         "new_sortament": "Лист 6 ГОСТ 19903-2015",
+         "material": "Лист 6 ГОСТ 19903-2015;12Х18Н10Т ГОСТ 7350-77", "clean_mass_kg": "5,04",
+         "error": "габариты не заданы"}
+    row = cf.rows_for_client([r])[0]
+    assert row[3] == "Лист 6 ГОСТ 19903-2015/ 12Х18Н10Т ГОСТ 7350-77"
+    assert row[4] == "" and row[7] == "габариты не заданы"

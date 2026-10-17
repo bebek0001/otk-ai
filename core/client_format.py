@@ -33,6 +33,13 @@ def _zagotovka(r: Dict[str, Any]) -> str:
     s = _gost_spaced(r.get("new_sortament", "")).strip()
     if s and "/" not in s:
         mat = _gost_spaced(r.get("material", "")).strip()
+        # штамп КОМПАС хранит «сортамент;марка»: сортамент уже в s, берём марку
+        if ";" in mat:
+            parts = [p.strip() for p in mat.split(";")]
+            if parts[0].split(" ")[0].lower() == s.split(" ")[0].lower():
+                mat = "; ".join(parts[1:])
+            else:
+                mat = mat.replace(";", ",")
         if mat:
             s = f"{s}/ {mat}"
     return s
@@ -61,8 +68,11 @@ def rows_for_client(results: List[Dict[str, Any]], include_errors: bool = True):
     results = [r for r in results if r.get("status") != "Сборка (пропуск)"]
     for i, r in enumerate(sorted(results, key=lambda x: _drawing_sort_key(x.get("drawing_no", ""))), 1):
         ok = r.get("status") in ("ОК", "⚠ проверить длину")
+        # сортамент из штампа CDW точен, даже если размер заготовки не найден
+        stamp_only = (r.get("status") == "⚠ нет длины" and r.get("source") == "CDW"
+                      and bool(r.get("new_sortament")))
         row = [i, r.get("drawing_no", ""), r.get("part_name", ""),
-               _zagotovka(r) if ok else "", _size(r) if ok else "",
+               _zagotovka(r) if (ok or stamp_only) else "", _size(r) if ok else "",
                _mass(r.get("stock_mass_kg")) if ok else "",
                _mass(r.get("clean_mass_kg"))]
         if include_errors:

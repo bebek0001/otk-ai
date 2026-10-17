@@ -485,9 +485,14 @@ def process_one_cdw(cdw_path: str) -> dict:
             if mat0.split(" ")[0].lower() in _STOCK_WORDS + ("профиль",):
                 result["error"] = (f"В штампе указан сортамент «{mat0}»; "
                                    "габариты заготовки в файле не заданы")
+                # Сортамент и марка из штампа точны: отдаём их технологу,
+                # размер заготовки (для листа это контур) остаётся пустым.
+                result["new_sortament"] = mat0
             else:
                 result["error"] = ("Размеры не параметризованы в чертеже — "
                                    "длина заготовки не определена")
+                if mat0:
+                    result["new_sortament"] = mat0
             result["source"] = "CDW"
             return result
 
