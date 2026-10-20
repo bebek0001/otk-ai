@@ -40,11 +40,12 @@ RULES = {
     "CDW+расчёт":    "formula_stamp",      # сортамент из штампа + формулы по ГОСТ
     "расчёт":        "formula_pdf",
     "CDW+размеры":   "dims_length",        # длина по размерам чертежа и массе
+    "CDW+контур":    "contour",            # габарит листа по контуру, проверка по массе
     "CDW+аналог":    "analog",             # размер у аналога из базы
     "ИИ":            "ai_guess",
     "CDW+ИИ":        "ai_guess",
 }
-NEVER_AUTO = {"ai_guess", "dims_length"}   # пока не доказано контрольным набором
+NEVER_AUTO = {"ai_guess", "dims_length", "contour"}   # пока не доказано контрольным набором
 
 
 def _stats_path() -> Path:

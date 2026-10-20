@@ -67,7 +67,7 @@ def rows_for_client(results: List[Dict[str, Any]], include_errors: bool = True):
     rows = []
     results = [r for r in results if r.get("status") != "Сборка (пропуск)"]
     for i, r in enumerate(sorted(results, key=lambda x: _drawing_sort_key(x.get("drawing_no", ""))), 1):
-        ok = r.get("status") in ("ОК", "⚠ проверить длину", "⚠ аналог: проверить")
+        ok = r.get("status") in ("ОК", "⚠ проверить длину", "⚠ аналог: проверить", "⚠ контур: проверить")
         # сортамент из штампа CDW точен, даже если размер заготовки не найден
         stamp_only = (r.get("status") == "⚠ нет длины" and r.get("source") == "CDW"
                       and bool(r.get("new_sortament")))

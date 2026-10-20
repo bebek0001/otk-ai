@@ -331,3 +331,20 @@ def test_allowance_is_learned_only_when_consistent(tmp_path, monkeypatch):
     for d in (0, 30, 5, 40, 10):
         allowance.record("Профиль", d)
     assert allowance.get("Профиль", 10)[2] is False        # разброс большой: остаётся значение по умолчанию
+
+
+def test_contour_sheet_size_and_mass_gate(monkeypatch):
+    from core import cdw_contour as cc
+    corners = [(-382.5, 70.0), (382.5, 70.0), (-382.5, -70.0), (382.5, -70.0), (-305.0, 26.0)]
+    monkeypatch.setattr(cc, "_pairs", lambda p: corners)
+    c = cc.propose_sheet("x.cdw", "Лист 6 ГОСТ 19903-2015", 5.04, 7.9)
+    assert c and (c.h_mm, c.l_mm) == (140.0, 765.0) and c.method == "прямоугольник"
+    # масса не сходится (деталь втрое легче габарита): предложения нет
+    assert cc.propose_sheet("x.cdw", "Лист 6", 1.5, 7.9) is None
+    assert cc.propose_sheet("x.cdw", "Круг 30", 5.04, 7.9) is None
+
+
+def test_contour_is_never_auto():
+    from core import agent
+    assert agent.autonomy("contour") != "авто" if hasattr(agent, "autonomy") else True
+    assert "contour" in agent.NEVER_AUTO

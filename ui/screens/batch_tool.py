@@ -410,6 +410,38 @@ def _apply_analog(result: dict, card: dict) -> bool:
     result["source"] = "CDW+аналог"
     return True
 
+STATUS_CONTOUR = "⚠ контур: проверить"
+
+
+def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
+    """Размер листа по контуру чертежа (габарит, проверенный по массе).
+    Только предложение: технолог подтверждает его в таблице."""
+    try:
+        from core import analogs, cdw_contour
+        mat0 = (card.get("material") or "").split(";")[0].strip()
+        if not analogs.sort_head(mat0).startswith("лист"):
+            return False
+        mass = card.get("mass")
+        mass_f = float(str(mass).replace(",", ".")) if mass not in (None, "") else None
+        dens = card.get("density")
+        dens_f = float(str(dens).replace(",", ".")) if dens not in (None, "") else None
+        c = cdw_contour.propose_sheet(cdw_path, mat0, mass_f, dens_f)
+    except Exception as e:                                       # noqa: BLE001
+        logger.warn(f"Контур листа не определён: {e}")
+        return False
+    if c is None:
+        return False
+    result["status"] = STATUS_CONTOUR
+    result["new_sortament"] = mat0
+    result["zagotovka_full"] = mat0
+    result["stock_size"] = f"HxL={c.h_mm:g}x{c.l_mm:g}"
+    result["stock_mass_kg"] = _fmt_mass_ru(c.blank_mass_kg)
+    result["error"] = (f"Размер листа по контуру чертежа ({c.method}, {c.confidence} уверенность; "
+                       f"{c.note}): проверьте, припуск не учтён")
+    result["source"] = "CDW+контур"
+    return True
+
+
 def _propose_from_dims(cdw_path: str, card: dict):
     """Предложение длины заготовки по размерам чертежа и массе. None, если
     сортамент в штампе не линейный или размеров нет."""
@@ -503,6 +535,9 @@ def process_one_cdw(cdw_path: str) -> dict:
             return result
         if not ex.length_mm or ex.length_mm <= 0:
             if _apply_analog(result, card):
+                _register_case(cdw_path, ex, result, result["error"])
+                return result
+            if _apply_contour(result, card, cdw_path):
                 _register_case(cdw_path, ex, result, result["error"])
                 return result
             prop = _propose_from_dims(cdw_path, card)
