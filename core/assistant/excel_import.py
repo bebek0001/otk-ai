@@ -19,7 +19,7 @@ from core.assistant import store
 
 _COLS = {
     "name":  ("наименование", "название", "деталь"),
-    "no":    ("обозначение", "номер чертеж", "№ чертежа", "децимальн"),
+    "no":    ("обозначение", "номер чертеж", "№ чертежа", "децимальн", "чертеж", "чертёж"),
     "mat":   ("материал",),
     "len":   ("длина",),
     "stock": ("сортамент", "заготовка"),
@@ -31,7 +31,7 @@ _COLS = {
 
 # Строки, где программа лишь предложила значение, а технолог не снял пометку,
 # в базу не попадают: непроверенное предположение не должно стать эталоном.
-_UNCONFIRMED_MARKS = ("длина предложена", "предположение ии")
+_UNCONFIRMED_MARKS = ("длина предложена", "предположение ии", "размер взят у аналога")
 
 
 def stock_type_from_text(text: str) -> Optional[str]:
@@ -101,11 +101,16 @@ def build_etalon(drawing_no: str, name: str, stock_cell: str, size_cell: str,
                     sort_part, re.I)
     d_blank = int(float(d_m.group(1).replace(",", "."))) if d_m else 0
     size_txt = (size_cell or "").strip()
-    l_m = re.search(r"L\s*=\s*(\d+(?:[.,]\d+)?)", size_txt)
-    if l_m:
+    num = r"(\d+(?:[.,]\d+)?)"
+    sheet_m = re.search(r"[HhBbНнВв]\s*[xхXХ×]\s*L\s*=?\s*" + num + r"\s*[xхXХ×]\s*" + num, size_txt)
+    l_m = re.search(r"L\s*=\s*" + num, size_txt)
+    if sheet_m:                      # лист: HxL = 62x108, берём больший габарит
+        l_blank = max(float(sheet_m.group(1).replace(",", ".")),
+                      float(sheet_m.group(2).replace(",", ".")))
+    elif l_m:
         l_blank = float(l_m.group(1).replace(",", "."))
     else:
-        dims = [float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", size_txt.split(",")[-1])]
+        dims = [float(x.replace(",", ".")) for x in re.findall(num, size_txt.split(",")[-1])]
         l_blank = max(dims) if dims else 0.0
     mark_m = re.match(r"\s*(.+?)\s+(ГОСТ\s*[\d\-–]+|ТУ\s*[\d\.\-]+)", material, re.I)
     mat_mark = mark_m.group(1).strip() if mark_m else material

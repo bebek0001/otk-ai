@@ -379,6 +379,37 @@ def _sortament_from_library(card: dict) -> str:
     return ""
 
 
+
+STATUS_ANALOG = "⚠ аналог: проверить"
+
+
+def _apply_analog(result: dict, card: dict) -> bool:
+    """Размер заготовки у аналога из базы (то же наименование, сортамент и масса).
+    Ответ только предложение: технолог подтверждает его в таблице."""
+    try:
+        from core import analogs
+        mat0 = (card.get("material") or "").split(";")[0].strip()
+        mass = card.get("mass")
+        mass_f = float(str(mass).replace(",", ".")) if mass not in (None, "") else None
+        a = analogs.find_analog(card.get("name", ""), mat0, mass, drawing_db.load_db(),
+                                drawing_no=card.get("marking", ""))
+    except Exception as e:                                       # noqa: BLE001
+        logger.warn(f"Поиск аналога не удался: {e}")
+        return False
+    if not a.n:
+        return False
+    if a.stock_mass_kg and mass_f and a.stock_mass_kg < mass_f:    # заготовка легче детали: аналог не годится
+        return False
+    result["status"] = STATUS_ANALOG
+    result["new_sortament"] = mat0
+    result["zagotovka_full"] = mat0
+    result["stock_size"] = a.size_text
+    result["stock_mass_kg"] = _fmt_mass_ru(a.stock_mass_kg) if a.stock_mass_kg else ""
+    result["error"] = (f"Размер взят у аналога из базы ({', '.join(a.sources[:3])}; "
+                       f"{a.n_agree} из {a.n} совпали, {a.confidence} уверенность): проверьте")
+    result["source"] = "CDW+аналог"
+    return True
+
 def _propose_from_dims(cdw_path: str, card: dict):
     """Предложение длины заготовки по размерам чертежа и массе. None, если
     сортамент в штампе не линейный или размеров нет."""
@@ -387,10 +418,15 @@ def _propose_from_dims(cdw_path: str, card: dict):
         if sec is None:
             return None
         dens = card.get("density") or 7850.0
+        default_allow = float(settings.load_settings().get("stock_allowance_mm", cdw_dims.DEFAULT_ALLOWANCE_MM))
+        try:
+            from core import allowance
+            allow, _n, _learned = allowance.get(sec.kind, default_allow)
+        except Exception:                                       # noqa: BLE001
+            allow = default_allow
         return cdw_dims.propose_length(
             sec, cdw_dims.dimension_values(cdw_path),
-            card.get("mass") or 0.0, float(dens),
-            float(settings.load_settings().get("stock_allowance_mm", cdw_dims.DEFAULT_ALLOWANCE_MM)))
+            card.get("mass") or 0.0, float(dens), allow)
     except Exception as e:                                    # noqa: BLE001
         logger.warn(f"Размеры из CDW не прочитаны: {e}")
         return None
@@ -466,6 +502,9 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["source"] = "CDW"
             return result
         if not ex.length_mm or ex.length_mm <= 0:
+            if _apply_analog(result, card):
+                _register_case(cdw_path, ex, result, result["error"])
+                return result
             prop = _propose_from_dims(cdw_path, card)
             if prop is not None and prop.blank_length_mm:
                 sec = cdw_dims.parse_section(card.get("material") or "")
@@ -473,6 +512,7 @@ def process_one_cdw(cdw_path: str) -> dict:
                 result["new_sortament"] = (card.get("material") or "").split(";")[0].strip()
                 result["zagotovka_full"] = result["new_sortament"]
                 result["stock_size"] = f"{sec.kind} {'х'.join(f'{v:g}' for v in sec.sizes)}, L={prop.blank_length_mm:g}"
+                result["part_length_mm"] = prop.part_length_mm
                 result["stock_mass_kg"] = _fmt_mass_ru(round(prop.blank_mass_kg, 2))
                 result["error"] = (f"Длина предложена по размерам чертежа ({prop.confidence} уверенность): "
                                    f"деталь {prop.part_length_mm:g} мм + припуск. {prop.note}").strip()

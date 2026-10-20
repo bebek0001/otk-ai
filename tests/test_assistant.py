@@ -280,3 +280,54 @@ def test_import_takes_technologist_block_when_headers_repeat(tmp_path, monkeypat
     assert (added, skipped, etalons) == (1, 1, 1)
     r = drawing_db.lookup_by_drawing_no("1.1")
     assert r["result_line"].splitlines()[1].rstrip(";") == "HxL=140x765" and r["d_blank_std_mm"] == 6
+
+
+def test_import_client_header_and_sheet_size(tmp_path, monkeypatch):
+    """Шапка технолога: «Чертеж» вместо «№ чертежа»; размер листа «HxL = 62x108»."""
+    from core import drawing_db
+    from core.assistant import store as st
+    from openpyxl import Workbook
+    monkeypatch.setattr(st, "ASSISTANT_DIR", tmp_path / "a")
+    monkeypatch.setattr(drawing_db, "DB_PATH", str(tmp_path / "db.json"))
+    monkeypatch.setattr(drawing_db, "SEED_DB_PATH", tmp_path / "no_seed.json")
+    wb = Workbook(); ws = wb.active
+    ws.append([]); ws.append([])
+    ws.append(["№", "Чертеж", "Наименование", "Сортамент", "Размер заготовки",
+               "Масса заг.", "Масса чист.", "Источник"])
+    ws.append([1, "201647.03.10.001", "Кронштейн", "Лист 5 ГОСТ 19903-2015/ Ст3пс5 ГОСТ 14637-89",
+               "HxL = 62x108", 0.263, 0.255, "Технолог"])
+    p = tmp_path / "t.xlsx"; wb.save(p)
+    assert excel_import.import_corrected_excel(str(p)) == (1, 0, 1)
+    r = drawing_db.lookup_by_drawing_no("201647.03.10.001")
+    assert r["l_blank_mm"] == 108.0 and r["d_blank_std_mm"] == 5
+    assert "62x108" in r["result_line"]
+
+
+def test_analog_found_for_series_and_rejected_for_other_mass():
+    from core import analogs
+    def et(no, mc, size="HxL=865x1005"):
+        return {"drawing_no": no, "part_name": "Стенка", "mass_clean_kg": mc, "mass_kg": 27.3,
+                "result_line": f"Лист 4 ГОСТ 19903-2015;\n{size};\nМасса заготовки, кг: 27,30"}
+    db = [et("1", 26.0), et("2", 26.8)]
+    a = analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "9")
+    assert a.n == 2 and a.size_text == "HxL=865x1005" and a.confidence == "высокая"
+    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 3.6, db, "9").n == 0   # масса другая
+    assert analogs.find_analog("Стенка", "Лист 6 ГОСТ 19903-2015", 26.0, db, "9").n == 0  # другая толщина
+    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "1").n == 1  # сам себе не аналог
+
+
+def test_allowance_is_learned_only_when_consistent(tmp_path, monkeypatch):
+    from core import allowance
+    monkeypatch.setattr(allowance, "AGENT_DIR", tmp_path)
+    assert allowance.get("Труба", 10) == (10.0, 0, False)
+    for d in (10, 10, 10, 10):
+        allowance.record("Труба", d)
+    assert allowance.get("Труба", 10)[2] is False          # мало наблюдений
+    allowance.record("Труба", 10)
+    assert allowance.get("Труба", 0) == (10.0, 5, True)
+    for d in (0, 0, 0, 0, 0):
+        allowance.record("Круг", d)
+    assert allowance.get("Круг", 10) == (0.0, 5, True)
+    for d in (0, 30, 5, 40, 10):
+        allowance.record("Профиль", d)
+    assert allowance.get("Профиль", 10)[2] is False        # разброс большой: остаётся значение по умолчанию

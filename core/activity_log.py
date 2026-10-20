@@ -86,6 +86,7 @@ def log_processing(
                 "stock_mass_kg":     result.get("stock_mass_kg", ""),
                 "clean_mass_kg":     result.get("clean_mass_kg", ""),
                 "source":            result.get("source", ""),
+                "part_length_mm":    result.get("part_length_mm", ""),
             })
 
         if raw_text:

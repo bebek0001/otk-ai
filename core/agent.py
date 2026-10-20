@@ -40,6 +40,7 @@ RULES = {
     "CDW+расчёт":    "formula_stamp",      # сортамент из штампа + формулы по ГОСТ
     "расчёт":        "formula_pdf",
     "CDW+размеры":   "dims_length",        # длина по размерам чертежа и массе
+    "CDW+аналог":    "analog",             # размер у аналога из базы
     "ИИ":            "ai_guess",
     "CDW+ИИ":        "ai_guess",
 }
@@ -177,4 +178,21 @@ def learn_from_row(drawing_no: str, final: Dict[str, Any],
         return None
     ok = same_answer(prog, final)
     record_outcome(rule, ok)
+    _learn_allowance(prog, final)
     return ok
+
+
+def _learn_allowance(prog: Dict[str, Any], final: Dict[str, Any]) -> None:
+    """Расхождение «длина заготовки у технолога минус длина детали» -> по типу проката."""
+    try:
+        part = float(prog.get("part_length_mm") or 0)
+        if not part or prog.get("source") != "CDW+размеры":
+            return
+        m = re.search(r"L\s*=\s*(\d+(?:[.,]\d+)?)", str(final.get("size", "")))
+        if not m:
+            return
+        kind = (prog.get("new_sortament") or "").split(" ")[0].capitalize()
+        from core import allowance
+        allowance.record(kind, float(m.group(1).replace(",", ".")) - part)
+    except Exception as e:                                      # noqa: BLE001
+        logger.warn(f"Агент: припуск не записан: {e}")

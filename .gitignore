@@ -51,3 +51,5 @@ recovered_etalons_*.json
 *.seed_merged
 *.corrupt-*
 *.tmp
+agent/
+*.tar.gz
