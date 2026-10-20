@@ -76,7 +76,11 @@ def rows_for_client(results: List[Dict[str, Any]], include_errors: bool = True):
                _mass(r.get("stock_mass_kg")) if ok else "",
                _mass(r.get("clean_mass_kg"))]
         if include_errors:
-            row.append("" if ok else (r.get("error") or r.get("status", "")))
+            # предложения программы (аналог, контур, длина по размерам) остаются
+            # помеченными: технолог видит, что ответ не подтверждён, а импорт
+            # «Обучения» не принимает такие строки в базу без снятия пометки
+            proposal = ok and r.get("status") != "ОК"
+            row.append((r.get("error") or r.get("status", "")) if (proposal or not ok) else "")
         rows.append(row)
     return rows
 

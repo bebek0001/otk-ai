@@ -44,6 +44,8 @@ def stock_type_from_text(text: str) -> Optional[str]:
     if "полос" in t:     return "Полоса"
     if "квадрат" in t:   return "Квадрат"
     if "круг" in t:      return "Круг"
+    if "профиль" in t and ("30245" in t or "8639" in t or "8645" in t):
+        return "ТрубаПроф"
     if "труба" in t:
         return "ТрубаПроф" if ("проф" in t or "8639" in t or "8645" in t) else "Труба"
     if "лист" in t:

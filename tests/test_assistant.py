@@ -348,3 +348,13 @@ def test_contour_is_never_auto():
     from core import agent
     assert agent.autonomy("contour") != "авто" if hasattr(agent, "autonomy") else True
     assert "contour" in agent.NEVER_AUTO
+
+
+def test_client_xlsx_keeps_note_for_proposals():
+    from core import client_format as cf
+    base = {"drawing_no": "1", "part_name": "Нож", "new_sortament": "Лист 6 ГОСТ 19903-2015",
+            "zagotovka_full": "Лист 6 ГОСТ 19903-2015", "stock_size": "HxL=140x765",
+            "stock_mass_kg": "5,04", "clean_mass_kg": 5.04, "error": "Размер листа по контуру"}
+    prop = cf.rows_for_client([dict(base, status="⚠ контур: проверить")])[0]
+    ok = cf.rows_for_client([dict(base, status="ОК")])[0]
+    assert "контуру" in prop[-1] and ok[-1] == ""
