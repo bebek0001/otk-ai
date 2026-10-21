@@ -211,7 +211,13 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         thread_bridge.install(self)
-        self.title("OTK.AI")
+        try:
+            from core import version
+            _build = version.get_build()
+        except Exception:                                      # noqa: BLE001
+            _build = "?"
+        self.title(f"OTK.AI  ·  сборка {_build}")
+        logger.info(f"Версия сборки: {_build}")
         self.geometry("1280x780")
         self.minsize(1100, 680)
 
@@ -225,6 +231,12 @@ class App(ctk.CTk):
         self.content.grid(row=0, column=1, sticky="nsew", padx=(0, 12), pady=12)
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
+
+        # Номер сборки в правом нижнем углу: сразу видно, какая версия установлена
+        self.grid_rowconfigure(1, weight=0)
+        self.build_label = ctk.CTkLabel(
+            self, text=f"сборка {_build}", font=ctk.CTkFont(size=11), text_color="#8a8f98")
+        self.build_label.grid(row=1, column=1, sticky="e", padx=(0, 18), pady=(0, 6))
 
         self._dev_panel = None
         self.current = None

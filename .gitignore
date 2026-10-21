@@ -53,3 +53,5 @@ recovered_etalons_*.json
 *.tmp
 agent/
 *.tar.gz
+
+build_info.txt

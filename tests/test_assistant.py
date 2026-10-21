@@ -400,3 +400,13 @@ def test_analog_reason_and_contour_debug():
     from core import analogs
     a = analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, [], "1")
     assert not a.n and "нет деталей" in a.reason
+
+
+def test_build_version_reads_file_or_git(tmp_path, monkeypatch):
+    from core import version
+    f = tmp_path / "build_info.txt"
+    f.write_text("abc1234  2026-10-21 12:00\n", encoding="utf-8")
+    monkeypatch.setattr(version, "_candidates", lambda: iter([f]))
+    assert version.get_build() == "abc1234  2026-10-21 12:00"
+    monkeypatch.setattr(version, "_candidates", lambda: iter([tmp_path / "нет.txt"]))
+    assert version.get_build()

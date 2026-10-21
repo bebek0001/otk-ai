@@ -10,6 +10,8 @@ datas = [
     (str(project_dir / "gosts"), "gosts"),
     (str(project_dir / "seed"), "seed"),
 ]
+if (project_dir / "build_info.txt").exists():
+    datas.append((str(project_dir / "build_info.txt"), "."))
 
 binaries = []
 hiddenimports = []
