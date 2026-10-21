@@ -319,6 +319,7 @@ def test_analog_found_for_series_and_rejected_for_other_mass():
 def test_allowance_is_learned_only_when_consistent(tmp_path, monkeypatch):
     from core import allowance
     monkeypatch.setattr(allowance, "AGENT_DIR", tmp_path)
+    monkeypatch.setattr(allowance, "from_db", lambda db=None: {})
     assert allowance.get("Труба", 10) == (10.0, 0, False)
     for d in (10, 10, 10, 10):
         allowance.record("Труба", d)
@@ -358,3 +359,17 @@ def test_client_xlsx_keeps_note_for_proposals():
     prop = cf.rows_for_client([dict(base, status="⚠ контур: проверить")])[0]
     ok = cf.rows_for_client([dict(base, status="ОК")])[0]
     assert "контуру" in prop[-1] and ok[-1] == ""
+
+
+def test_allowance_prior_from_db(tmp_path, monkeypatch):
+    from core import allowance
+    monkeypatch.setattr(allowance, "_path", lambda: tmp_path / "a.json")
+    db = [{"stock_type": "Труба", "l_part_mm": 100 + i, "l_blank_mm": 120 + i} for i in range(6)]
+    db += [{"stock_type": "Круг", "l_part_mm": 50, "l_blank_mm": 70}] * 2      # мало
+    db += [{"stock_type": "ЛистГК", "l_part_mm": 50, "l_blank_mm": 50}] * 8     # листы не считаются
+    assert allowance.get("Труба", 10, db) == (20.0, 6, True)
+    assert allowance.get("Круг", 10, db)[2] is False
+    assert "ЛистГК" not in allowance.from_db(db)
+    for _ in range(5):                              # исправления технолога важнее базы
+        allowance.record("Труба", 10)
+    assert allowance.get("Труба", 10, db)[0] == 10.0
