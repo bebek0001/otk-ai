@@ -18,7 +18,6 @@ import re
 import threading
 import datetime
 import customtkinter as ctk
-from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from core.engine import (
@@ -32,62 +31,11 @@ from core.engine import (
 # Сам engine.py при этом не изменён.
 from core.stock_ext import calculate_stock_line as calculate_missing_stock_line
 from core import cdw_bridge
-from core import cdw_dims
-from core import client_format
-from core import settings
 from core import drawing_db
 from core.drawing_db import build_etalon_examples_block, lookup_etalon
 from core.gost_reader import get_gost_context_for_query
 from core import logger
 from core import activity_log
-from core import confirm_queue
-from core.assistant import store as assistant_store
-from core import mass_check
-
-
-def _apply_mass_check(result: dict, path: str, ex) -> None:
-    """Масса заготовки против массы детали. Не сходится: строка с пометкой
-    «⚠ масса не сходится» и на разбор технологу (расчётные значения остаются)."""
-    ok, msg = mass_check.check(result.get("stock_mass_kg"), result.get("clean_mass_kg"))
-    if ok:
-        return
-    result["status"] = "⚠ масса не сходится"
-    result["error"] = msg[:160]
-    _register_case(path, ex, result, msg)
-
-
-def _register_case(path: str, ex, result: dict, error: str) -> None:
-    """Позиция, где заготовка не определилась, уходит в «Помощник технолога».
-    Best-effort: сбой здесь не должен срывать пакетную обработку."""
-    try:
-        assistant_store.add_case(
-            source_file=path, part_name=result.get("part_name") or ex.part_name or "",
-            material=result.get("material", ""), length_mm=getattr(ex, "length_mm", None),
-            drawing_no=result.get("drawing_no", ""), reason="error", error=error)
-    except Exception as e:                                    # noqa: BLE001
-        logger.warn(f"Помощник: позиция не поставлена на разбор {path}: {e}")
-
-
-def _enqueue_if_guessed(res, ex, path: str) -> None:
-    """
-    Если calculate_missing_stock_line() ответил через RAG/Vision (угадал
-    по похожим чертежам/картинке, а не посчитал по ГОСТ) — кладёт
-    результат в очередь подтверждения, чтобы он не попал в базу
-    эталонов как новый образец без проверки технологом. Детерминированный
-    расчёт (в т.ч. CDW+расчёт) сюда не попадает — он сам по себе не
-    пишется в базу из пакетной обработки, подтверждение ему не нужно.
-    Best-effort: ошибка здесь не должна срывать пакетную обработку.
-    """
-    if not getattr(res, "needs_confirmation", False):
-        return
-    try:
-        fields = confirm_queue.calc_result_to_pending_fields(
-            res, pdf_text=ex.pdf_text, part_name=ex.part_name,
-            source_file=path,
-        )
-        confirm_queue.add_pending(fields)
-    except Exception as e:                                    # noqa: BLE001
-        logger.warn(f"Не удалось поставить в очередь подтверждения {path}: {e}")
 
 
 # ============================================================
@@ -321,23 +269,14 @@ def process_one_pdf(pdf_path: str) -> dict:
             result["error"]  = "Длина детали не определена"
             return result
 
-        try:
-            res = calculate_missing_stock_line(ex, length_mm, mark, gost)
-        except Exception as calc_err:
-            result["status"] = "⚠ заготовка не определена"
-            result["error"]  = str(calc_err)[:120]
-            _register_case(pdf_path, ex, result, str(calc_err))
-            logger.warn(f"PDF {name}: расчёт заготовки не удался: {calc_err}")
-            return result
+        res = calculate_missing_stock_line(ex, length_mm, mark, gost)
         new_sortament, stock_size, stock_mass = parse_result_line(res.result_line)
 
         result["new_sortament"]  = new_sortament
         result["stock_size"]     = stock_size
         result["stock_mass_kg"]  = stock_mass
         result["zagotovka_full"] = new_sortament
-        result["source"]         = "RAG (ждёт подтверждения)" if getattr(res, "needs_confirmation", False) else "расчёт"
-        _enqueue_if_guessed(res, ex, pdf_path)
-        _apply_mass_check(result, pdf_path, ex)
+        result["source"]         = "расчёт"
 
     except Exception as e:
         result["status"] = "❌ ошибка"
@@ -357,16 +296,6 @@ _STOCK_WORDS = (
 )
 
 
-STATUS_ASSEMBLY = "Сборка (пропуск)"
-
-
-def is_assembly(marking: str, name: str) -> bool:
-    m = (marking or "").strip().upper()
-    n = (name or "").lower()
-    return (m.endswith(" СБ") or "сборочный чертеж" in n
-            or "сборочный чертёж" in n)
-
-
 def _sortament_from_library(card: dict) -> str:
     """
     Если деталь вставлена из библиотеки проката, сортамент лежит
@@ -377,91 +306,6 @@ def _sortament_from_library(card: dict) -> str:
         if any(w in base.lower() for w in _STOCK_WORDS):
             return base.strip()
     return ""
-
-
-
-STATUS_ANALOG = "⚠ аналог: проверить"
-
-
-def _apply_analog(result: dict, card: dict) -> bool:
-    """Размер заготовки у аналога из базы (то же наименование, сортамент и масса).
-    Ответ только предложение: технолог подтверждает его в таблице."""
-    try:
-        from core import analogs
-        mat0 = (card.get("material") or "").split(";")[0].strip()
-        mass = card.get("mass")
-        mass_f = float(str(mass).replace(",", ".")) if mass not in (None, "") else None
-        a = analogs.find_analog(card.get("name", ""), mat0, mass, drawing_db.load_db(),
-                                drawing_no=card.get("marking", ""))
-    except Exception as e:                                       # noqa: BLE001
-        logger.warn(f"Поиск аналога не удался: {e}")
-        return False
-    if not a.n:
-        return False
-    if a.stock_mass_kg and mass_f and a.stock_mass_kg < mass_f:    # заготовка легче детали: аналог не годится
-        return False
-    result["status"] = STATUS_ANALOG
-    result["new_sortament"] = mat0
-    result["zagotovka_full"] = mat0
-    result["stock_size"] = a.size_text
-    result["stock_mass_kg"] = _fmt_mass_ru(a.stock_mass_kg) if a.stock_mass_kg else ""
-    result["error"] = (f"Размер взят у аналога из базы ({', '.join(a.sources[:3])}; "
-                       f"{a.n_agree} из {a.n} совпали, {a.confidence} уверенность): проверьте")
-    result["source"] = "CDW+аналог"
-    return True
-
-STATUS_CONTOUR = "⚠ контур: проверить"
-
-
-def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
-    """Размер листа по контуру чертежа (габарит, проверенный по массе).
-    Только предложение: технолог подтверждает его в таблице."""
-    try:
-        from core import analogs, cdw_contour
-        mat0 = (card.get("material") or "").split(";")[0].strip()
-        if not analogs.sort_head(mat0).startswith("лист"):
-            return False
-        mass = card.get("mass")
-        mass_f = float(str(mass).replace(",", ".")) if mass not in (None, "") else None
-        dens = card.get("density")
-        dens_f = float(str(dens).replace(",", ".")) if dens not in (None, "") else None
-        c = cdw_contour.propose_sheet(cdw_path, mat0, mass_f, dens_f)
-    except Exception as e:                                       # noqa: BLE001
-        logger.warn(f"Контур листа не определён: {e}")
-        return False
-    if c is None:
-        return False
-    result["status"] = STATUS_CONTOUR
-    result["new_sortament"] = mat0
-    result["zagotovka_full"] = mat0
-    result["stock_size"] = f"HxL={c.h_mm:g}x{c.l_mm:g}"
-    result["stock_mass_kg"] = _fmt_mass_ru(c.blank_mass_kg)
-    result["error"] = (f"Размер листа по контуру чертежа ({c.method}, {c.confidence} уверенность; "
-                       f"{c.note}): проверьте, припуск не учтён")
-    result["source"] = "CDW+контур"
-    return True
-
-
-def _propose_from_dims(cdw_path: str, card: dict):
-    """Предложение длины заготовки по размерам чертежа и массе. None, если
-    сортамент в штампе не линейный или размеров нет."""
-    try:
-        sec = cdw_dims.parse_section(card.get("material") or "")
-        if sec is None:
-            return None
-        dens = card.get("density") or 7850.0
-        default_allow = float(settings.load_settings().get("stock_allowance_mm", cdw_dims.DEFAULT_ALLOWANCE_MM))
-        try:
-            from core import allowance
-            allow, _n, _learned = allowance.get(sec.kind, default_allow)
-        except Exception:                                       # noqa: BLE001
-            allow = default_allow
-        return cdw_dims.propose_length(
-            sec, cdw_dims.dimension_values(cdw_path),
-            card.get("mass") or 0.0, float(dens), allow)
-    except Exception as e:                                    # noqa: BLE001
-        logger.warn(f"Размеры из CDW не прочитаны: {e}")
-        return None
 
 
 def process_one_cdw(cdw_path: str) -> dict:
@@ -481,12 +325,6 @@ def process_one_cdw(cdw_path: str) -> dict:
         result["part_name"]     = card.get("name", "") or os.path.splitext(name)[0]
         result["material"]      = card.get("material", "")
         result["clean_mass_kg"] = _fmt_mass_ru(card.get("mass"))
-
-        if is_assembly(card.get("marking", ""), card.get("name", "")):
-            result["status"] = STATUS_ASSEMBLY
-            result["error"]  = "Сборочный чертёж: заготовка не рассчитывается"
-            result["source"] = "CDW"
-            return result
 
         lib = _sortament_from_library(card)
         if lib:
@@ -534,40 +372,10 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["source"] = "CDW"
             return result
         if not ex.length_mm or ex.length_mm <= 0:
-            if _apply_analog(result, card):
-                _register_case(cdw_path, ex, result, result["error"])
-                return result
-            if _apply_contour(result, card, cdw_path):
-                _register_case(cdw_path, ex, result, result["error"])
-                return result
-            prop = _propose_from_dims(cdw_path, card)
-            if prop is not None and prop.blank_length_mm:
-                sec = cdw_dims.parse_section(card.get("material") or "")
-                result["status"] = "⚠ проверить длину"
-                result["new_sortament"] = (card.get("material") or "").split(";")[0].strip()
-                result["zagotovka_full"] = result["new_sortament"]
-                result["stock_size"] = f"{sec.kind} {'х'.join(f'{v:g}' for v in sec.sizes)}, L={prop.blank_length_mm:g}"
-                result["part_length_mm"] = prop.part_length_mm
-                result["stock_mass_kg"] = _fmt_mass_ru(round(prop.blank_mass_kg, 2))
-                result["error"] = (f"Длина предложена по размерам чертежа ({prop.confidence} уверенность): "
-                                   f"деталь {prop.part_length_mm:g} мм + припуск. {prop.note}").strip()
-                result["source"] = "CDW+размеры"
-                _register_case(cdw_path, ex, result, result["error"])
-                return result
             # Паспортные данные всё равно годные — отдаём их, отметив пробел
             result["status"] = "⚠ нет длины"
-            mat0 = (card.get("material") or "").split(";")[0].strip()
-            if mat0.split(" ")[0].lower() in _STOCK_WORDS + ("профиль",):
-                result["error"] = (f"В штампе указан сортамент «{mat0}»; "
-                                   "габариты заготовки в файле не заданы")
-                # Сортамент и марка из штампа точны: отдаём их технологу,
-                # размер заготовки (для листа это контур) остаётся пустым.
-                result["new_sortament"] = mat0
-            else:
-                result["error"] = ("Размеры не параметризованы в чертеже — "
-                                   "длина заготовки не определена")
-                if mat0:
-                    result["new_sortament"] = mat0
+            result["error"]  = ("Размеры не параметризованы в чертеже — "
+                                "длина заготовки не определена")
             result["source"] = "CDW"
             return result
 
@@ -580,7 +388,6 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["status"] = "⚠ заготовка не определена"
             result["error"]  = str(calc_err)[:120]
             result["source"] = "CDW"
-            _register_case(cdw_path, ex, result, str(calc_err))
             logger.warn(f"CDW {name}: расчёт заготовки не удался: {calc_err}")
             return result
 
@@ -590,9 +397,7 @@ def process_one_cdw(cdw_path: str) -> dict:
         result["stock_size"]     = stock_size
         result["stock_mass_kg"]  = stock_mass
         result["zagotovka_full"] = new_sortament
-        result["source"]         = "CDW+RAG (ждёт подтверждения)" if getattr(res, "needs_confirmation", False) else "CDW+расчёт"
-        _enqueue_if_guessed(res, ex, cdw_path)
-        _apply_mass_check(result, cdw_path, ex)
+        result["source"]         = "CDW+расчёт"
 
     except Exception as e:
         result["status"] = "❌ ошибка"
@@ -704,7 +509,7 @@ def process_one_pdf_with_ai(pdf_path: str) -> dict:
 
 def process_one_cdw_with_ai(cdw_path: str) -> dict:
     result = process_one_cdw(cdw_path)
-    if result["status"] in ("ОК", STATUS_ASSEMBLY):
+    if result["status"] == "ОК":
         return result
 
     try:
@@ -750,16 +555,6 @@ def _apply_ai(result: dict, ex, text_block: str, fname: str) -> None:
                                             mass      = line.split(":", 1)[1].strip()
         elif low.startswith("сортамент:"):  sortament = line.split(":", 1)[1].strip()
 
-    # Страховка: ИИ видит только текст штампа, габаритов у него нет, поэтому
-    # размеры он по сути придумывает. Ответ принимается как подсказка, только
-    # если масса заготовки правдоподобна относительно массы детали; иначе
-    # он отбрасывается и позиция остаётся с исходной ошибкой.
-    ai_mass = re.sub(r"[^\d,\.]", "", mass)
-    ok_mass, why = mass_check.check(ai_mass, result.get("clean_mass_kg"))
-    if not ai_mass or not ok_mass:
-        logger.info(f"ИИ: ответ отброшен ({fname}): {why or 'нет массы'}")
-        return
-
     if zagotovka:
         result["new_sortament"]  = sortament or zagotovka
         result["stock_size"]     = size
@@ -769,8 +564,8 @@ def _apply_ai(result: dict, ex, text_block: str, fname: str) -> None:
         result["zagotovka_full"] = answer.strip()[:120]
 
     result["source"] = "ИИ"
-    result["status"] = "⚠ ИИ: проверить"
-    result["error"]  = "Предположение ИИ: габариты не подтверждены чертежом"
+    result["status"] = "ОК"
+    result["error"]  = ""
     logger.info(f"ИИ: {fname} → {result['zagotovka_full'][:50]}")
 
 
@@ -801,13 +596,6 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
         result = process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
 
     raw_text = result.pop("_raw_text", "")
-    try:
-        from core import agent
-        dec = agent.decide(result)
-        result["agent_level"], result["agent_rule"] = dec["level"], dec["rule"]
-        agent.log_decision(result.get("drawing_no", ""), dec)
-    except Exception as e:                                      # noqa: BLE001
-        logger.warn(f"Агент: решение не принято: {e}")
     activity_log.log_processing(
         source_path=path,
         mode="batch",
@@ -859,15 +647,7 @@ def scan_folder(folder: str) -> list:
 # Экспорт в Excel
 # ============================================================
 
-def _export_client(results: list, save_path: str) -> None:
-    """Таблица в формате заказчика. Столбец «Ошибка» включается настройкой
-    excel_with_errors (по умолчанию да; для передачи в PLM его можно отключить)."""
-    with_err = str(settings.load_settings().get("excel_with_errors", "1")) not in ("0", "False", "false", "")
-    client_format.export_client_xlsx(results, save_path, include_errors=with_err)
-
-
 def export_to_excel(results: list, save_path: str) -> None:
-    results = [r for r in results if r.get("status") != STATUS_ASSEMBLY]
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -962,12 +742,12 @@ def export_to_excel(results: list, save_path: str) -> None:
         src = r.get("source", "")
 
         if r["status"] == "ОК":
-            if "RAG" in src or src.startswith("ИИ"):
-                fill = ai_fill
-            elif src.startswith("CDW"):
+            if src.startswith("CDW"):
                 fill = cdw_fill
             elif src == "расчёт":
                 fill = ok_fill
+            elif src.startswith("ИИ"):
+                fill = ai_fill
             else:
                 fill = db_fill
         elif "⚠" in r["status"]:
@@ -1012,8 +792,7 @@ def export_to_excel(results: list, save_path: str) -> None:
         (cdw_fill,  "Прочитано из файла КОМПАС (.cdw) — точные данные"),
         (db_fill,   "Из базы эталонов"),
         (ok_fill,   "Из расчёта по ГОСТ"),
-        (ai_fill,   "Определено ИИ/RAG — поставлено в очередь подтверждения, "
-                    "в базу эталонов попадёт только после проверки технологом"),
+        (ai_fill,   "Определено ИИ"),
         (warn_fill, "Предупреждение — часть данных не определена"),
         (err_fill,  "Ошибка обработки"),
     ]):
@@ -1405,18 +1184,10 @@ class BatchToolScreen(ctk.CTkFrame):
         def worker():
             total = len(files)
             for i, path in enumerate(files):
-                thread_bridge.post(self.lbl_status.configure,
+                self.after(0, self.lbl_status.configure,
                            {"text": f"Обработка {i + 1}/{total}: {os.path.basename(path)}"})
-                thread_bridge.post(self.progress.set, i / total)
-                try:
-                    self._results.append(process_one_file(path, use_ai=use_ai))
-                except Exception as e:                          # noqa: BLE001
-                    # Один сбойный файл не должен подвешивать всю обработку:
-                    # строка с ошибкой, дальше идём по списку.
-                    logger.error(f"Пакетная обработка: необработанная ошибка {path}: {e}")
-                    r = _blank_result(path)
-                    r["status"], r["error"] = "❌ ошибка", str(e)[:120]
-                    self._results.append(r)
+                self.after(0, self.progress.set, i / total)
+                self._results.append(process_one_file(path, use_ai=use_ai))
 
             saved_path = ""
             save_report = ""
@@ -1442,9 +1213,7 @@ class BatchToolScreen(ctk.CTkFrame):
                 self.btn_run.configure(state="normal", text="Запустить обработку")
                 self.btn_add.configure(state="normal")
                 self.btn_folder_run.configure(state="normal")
-                # Выгрузка нужна и когда нет ни одной строки «ОК»: по ТЗ работа
-                # завершается таблицей даже при ошибках.
-                if self._results:
+                if ok > 0:
                     self.btn_export.configure(state="normal")
                 self._processing = False
                 logger.info(f"Пакетная обработка завершена: {ok}/{len(self._results)} ОК")
@@ -1453,7 +1222,7 @@ class BatchToolScreen(ctk.CTkFrame):
                         "Папка обработана",
                         f"Таблица сохранена:\n{saved_path}\n\n{save_report}")
 
-            thread_bridge.post(finish)
+            self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1470,7 +1239,7 @@ class BatchToolScreen(ctk.CTkFrame):
             log_path = os.path.join(f_out, f"OTK_протокол_{stamp}_{suffix}.txt")
             suffix += 1
 
-        _export_client(self._results, xlsx)
+        export_to_excel(self._results, xlsx)
         write_run_log(self._results, log_path, f_in)
         return xlsx, "Исходные чертежи сохранены без изменений"
 
@@ -1546,7 +1315,7 @@ class BatchToolScreen(ctk.CTkFrame):
         if not path:
             return
         try:
-            _export_client(self._results, path)
+            export_to_excel(self._results, path)
             messagebox.showinfo("Сохранено",
                                 f"Файл сохранён:\n{path}\n\nЗаписей: {len(self._results)}")
             logger.info(f"Экспорт в Excel: {path}")
