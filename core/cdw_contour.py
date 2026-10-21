@@ -36,6 +36,8 @@ RECT_MASS_RANGE = (0.90, 1.30)   # масса листа габарита / чи
 BBOX_MASS_RANGE = (0.98, 1.10)
 ROUND_TO_MM = 1.0
 
+last_debug: list = []        # причины отказа последнего вызова (для журнала)
+
 
 @dataclass
 class ContourSize:
@@ -98,12 +100,15 @@ def sheet_thickness(sortament_head: str) -> Optional[float]:
 
 def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
                   density: Optional[float] = None) -> Optional[ContourSize]:
+    last_debug.clear()
     t = sheet_thickness(sortament_head)
     if not t or not clean_mass_kg or clean_mass_kg <= 0:
+        last_debug.append("нет толщины листа или массы детали")
         return None
     rho = density if density and 1 < density < 25 else DENSITY_DEFAULT
     pts = _pairs(path)
     if not pts:
+        last_debug.append("в файле нет координатных пар")
         return None
 
     def mass(a, b):
@@ -116,10 +121,13 @@ def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
     bb = _bbox_nonzero(pts)
     if bb:
         cand.append((bb, "габарит точек", BBOX_MASS_RANGE, "низкая"))
+    if not cand:
+        last_debug.append("не найден ни прямоугольник из углов, ни габарит точек")
     for (a, b), method, (lo, hi), conf in cand:
         if a < 5 or b < 5:
             continue
         ratio = mass(a, b) / clean_mass_kg
+        last_debug.append(f"{method} {a:g}x{b:g}: масса габарита/чистая {ratio:.2f}, нужно {lo}-{hi}")
         if lo <= ratio <= hi:
             h, l = sorted((round(a / ROUND_TO_MM) * ROUND_TO_MM,
                            round(b / ROUND_TO_MM) * ROUND_TO_MM))

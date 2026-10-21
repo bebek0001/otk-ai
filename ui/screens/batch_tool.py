@@ -43,6 +43,7 @@ from core import activity_log
 from core import confirm_queue
 from core.assistant import store as assistant_store
 from core import mass_check
+from core import trace
 
 
 def _apply_mass_check(result: dict, path: str, ex) -> None:
@@ -397,9 +398,13 @@ def _apply_analog(result: dict, card: dict) -> bool:
         logger.warn(f"Поиск аналога не удался: {e}")
         return False
     if not a.n:
+        trace.step("аналог", a.reason or "не найден")
         return False
     if a.stock_mass_kg and mass_f and a.stock_mass_kg < mass_f:    # заготовка легче детали: аналог не годится
+        trace.step("аналог", f"отброшен: масса заготовки {a.stock_mass_kg} меньше детали {mass_f}")
         return False
+    trace.step("аналог", f"{a.size_text}; найдено {a.n}, совпали {a.n_agree}, {a.confidence}; "
+               f"источники {', '.join(a.sources[:3])}")
     result["status"] = STATUS_ANALOG
     result["new_sortament"] = mat0
     result["zagotovka_full"] = mat0
@@ -420,6 +425,7 @@ def _crosscheck_with_db(result: dict, card: dict, etalon: dict) -> None:
     try:
         from core import crosscheck
         notes = crosscheck.compare(card, etalon)
+        trace.step("сверка с базой", "; ".join(notes) if notes else "штамп и база согласованы")
         if notes:
             result["status"] = STATUS_DB_MISMATCH
             result["error"] = "Данные чертежа и базы расходятся: " + "; ".join(notes) + ". Проверьте"
@@ -427,7 +433,7 @@ def _crosscheck_with_db(result: dict, card: dict, etalon: dict) -> None:
         if m and etalon.get("drawing_no"):
             etalon["mass_clean_kg"] = m
             drawing_db.upsert_by_drawing_no(dict(etalon))
-    except Exception as e:
+    except Exception as e:                                       # noqa: BLE001
         logger.warn(f"Сверка с базой не удалась: {e}")
 
 
@@ -447,6 +453,9 @@ def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
     except Exception as e:                                       # noqa: BLE001
         logger.warn(f"Контур листа не определён: {e}")
         return False
+    from core import cdw_contour as _cc
+    trace.step("контур", (f"HxL={c.h_mm:g}x{c.l_mm:g} ({c.method}, {c.note})" if c
+                          else "предложения нет: " + "; ".join(_cc.last_debug)))
     if c is None:
         return False
     result["status"] = STATUS_CONTOUR
@@ -472,6 +481,8 @@ def _propose_from_dims(cdw_path: str, card: dict):
         try:
             from core import allowance
             allow, _n, _learned = allowance.get(sec.kind, default_allow)
+            trace.step("припуск", f"{sec.kind}: {allow:g} мм, наблюдений {_n}, "
+                       f"{'выучен' if _learned else 'из настроек'}")
         except Exception:                                       # noqa: BLE001
             allow = default_allow
         return cdw_dims.propose_length(
@@ -499,6 +510,9 @@ def process_one_cdw(cdw_path: str) -> dict:
         result["part_name"]     = card.get("name", "") or os.path.splitext(name)[0]
         result["material"]      = card.get("material", "")
         result["clean_mass_kg"] = _fmt_mass_ru(card.get("mass"))
+        trace.step("чтение", f"обозначение {card.get('marking', '')}, «{card.get('name', '')}», "
+                   f"штамп «{card.get('material', '')}», масса {card.get('mass')}, "
+                   f"плотность {card.get('density')}")
 
         if is_assembly(card.get("marking", ""), card.get("name", "")):
             result["status"] = STATUS_ASSEMBLY
@@ -529,6 +543,8 @@ def process_one_cdw(cdw_path: str) -> dict:
         if not etalon:
             etalon = lookup_etalon(ex.pdf_text, ex.part_name)
         if etalon:
+            trace.step("база", f"найдена запись {etalon.get('drawing_no', '')}: "
+                       f"{(etalon.get('result_line') or '').replace(chr(10), ' | ')}")
             db_name = etalon.get("part_name", "")
             if db_name and not result["part_name"]:
                 result["part_name"] = db_name
@@ -542,6 +558,7 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["source"]         = "CDW+база"
             _crosscheck_with_db(result, card, etalon)
             return result
+        trace.step("база", "записи по обозначению нет, ищу аналог/контур/размеры")
 
         # 2) Расчёт
         mark = normalize_mark(ex.material_mark or "")
@@ -560,6 +577,9 @@ def process_one_cdw(cdw_path: str) -> dict:
                 _register_case(cdw_path, ex, result, result["error"])
                 return result
             prop = _propose_from_dims(cdw_path, card)
+            trace.step("размеры", (f"деталь {prop.part_length_mm:g} мм, заготовка {prop.blank_length_mm:g} мм, "
+                                   f"{prop.confidence}") if (prop is not None and prop.blank_length_mm)
+                       else "длину по размерам предложить не удалось")
             if prop is not None and prop.blank_length_mm:
                 sec = cdw_dims.parse_section(card.get("material") or "")
                 result["status"] = "⚠ проверить длину"
@@ -604,6 +624,7 @@ def process_one_cdw(cdw_path: str) -> dict:
             return result
 
         new_sortament, stock_size, stock_mass = parse_result_line(res.result_line)
+        trace.step("формулы", f"длина детали {ex.length_mm} мм → {res.result_line.replace(chr(10), ' | ')}")
 
         result["new_sortament"]  = new_sortament
         result["stock_size"]     = stock_size
@@ -810,6 +831,8 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
     """Единая точка входа: .cdw читаем структурно, .m3d — свойства без
     геометрии, остальное — через PDF."""
     kind = _source_kind(path)
+    trace.begin(path)
+    trace.step("начало", f"тип {kind}, ИИ {'вкл' if use_ai else 'выкл'}")
     if kind == "cdw":
         result = process_one_cdw_with_ai(path) if use_ai else process_one_cdw(path)
     elif kind == "m3d":
@@ -825,8 +848,13 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
         dec = agent.decide(result)
         result["agent_level"], result["agent_rule"] = dec["level"], dec["rule"]
         agent.log_decision(result.get("drawing_no", ""), dec)
+        trace.step("агент", f"уровень «{dec['level']}», правило {dec['rule']}")
     except Exception as e:                                      # noqa: BLE001
         logger.warn(f"Агент: решение не принято: {e}")
+    trace.step("итог", f"{result.get('status', '')} | источник {result.get('source', '')} | "
+               f"{result.get('new_sortament', '')} | {result.get('stock_size', '')} | "
+               f"масса {result.get('stock_mass_kg', '')}",
+               error=result.get("error", ""))
     activity_log.log_processing(
         source_path=path,
         mode="batch",

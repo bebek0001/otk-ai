@@ -379,6 +379,24 @@ def test_crosscheck_cdw_vs_db():
     from core import crosscheck as cx
     et = {"result_line": "Лист 4 ГОСТ 19903-2015;\nHxL=865x1005;", "mass_clean_kg": 26.0}
     assert cx.compare({"material": "Лист 4 ГОСТ 19903-2015;Ст3пс", "mass": "26"}, et) == []
-    assert len(cx.compare({"material": "Лист 6 ГОСТ 19903-2015;Ст3пс", "mass": "40"}, et)) == 2
+    n = cx.compare({"material": "Лист 6 ГОСТ 19903-2015;Ст3пс", "mass": "40"}, et)
+    assert len(n) == 2
     assert cx.missing_clean_mass({"mass": "5,5"}, {"result_line": ""}) == 5.5
     assert cx.missing_clean_mass({"mass": "5,5"}, et) is None
+
+
+def test_trace_writes_and_exports(tmp_path, monkeypatch):
+    from core import trace
+    monkeypatch.setattr(trace, "PROCESSING_LOG_DIR", tmp_path)
+    trace.begin("/x/деталь.cdw")
+    trace.step("аналог", "не найден", n=0)
+    out = tmp_path / "out.txt"
+    assert trace.export_text(str(out)) > 2
+    txt = out.read_text(encoding="utf-8")
+    assert "деталь.cdw" in txt and "аналог" in txt
+
+
+def test_analog_reason_and_contour_debug():
+    from core import analogs
+    a = analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, [], "1")
+    assert not a.n and "нет деталей" in a.reason

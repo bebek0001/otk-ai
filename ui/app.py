@@ -31,6 +31,8 @@ class DevPanel(ctk.CTkToplevel):
                      font=ctk.CTkFont(size=15, weight="bold")).pack(side="left")
         ctk.CTkButton(header, text="Очистить", width=90, height=28,
                       command=self._on_clear).pack(side="right")
+        ctk.CTkButton(header, text="Сохранить журнал в файл", width=190, height=28,
+                      command=self._on_export).pack(side="right", padx=(0, 8))
 
         filter_frame = ctk.CTkFrame(self, fg_color="transparent")
         filter_frame.pack(fill="x", padx=14, pady=(6, 4))
@@ -90,6 +92,22 @@ class DevPanel(ctk.CTkToplevel):
         self._text.configure(state="disabled")
         for line in logger.get_history():
             self._append(line)
+
+    def _on_export(self):
+        from tkinter import filedialog
+        from datetime import datetime
+        from core import trace
+        path = filedialog.asksaveasfilename(
+            title="Сохранить журнал", defaultextension=".txt",
+            initialfile=f"otk_ai_log_{datetime.now():%Y-%m-%d_%H-%M}.txt",
+            filetypes=[("Текст", "*.txt")])
+        if not path:
+            return
+        try:
+            n = trace.export_text(path)
+            logger.info(f"Журнал сохранён: {path} ({n} строк)")
+        except Exception as e:                                   # noqa: BLE001
+            logger.error("Не удалось сохранить журнал", e)
 
     def _on_clear(self):
         logger.clear()

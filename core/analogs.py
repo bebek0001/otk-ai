@@ -34,6 +34,7 @@ class Analog:
     n_agree: int = 0           # сколько из них дают выбранный размер
     sources: List[str] = field(default_factory=list)
     confidence: str = "нет"    # высокая | низкая | нет
+    reason: str = ""           # почему аналога нет (для журнала)
 
 
 def norm_name(s: str) -> str:
@@ -77,16 +78,19 @@ def find_analog(part_name: str, stamp_sortament: str, clean_mass_kg: Optional[fl
     head_k = sort_head(stamp_sortament)
     no_k = re.sub(r"\s+", "", drawing_no or "").lower()
     if not name_k or not head_k or not clean_mass_kg:
-        return Analog()
+        return Analog(reason="нет названия, сортамента или массы для поиска")
     hits = []
+    n_name = n_head = 0
     for e in db:
         if re.sub(r"\s+", "", e.get("drawing_no", "")).lower() == no_k:
             continue
         if norm_name(e.get("part_name", "")) != name_k:
             continue
+        n_name += 1
         line = e.get("result_line", "")
         if sort_head(line.split("\n")[0]) != head_k:
             continue
+        n_head += 1
         mc = e.get("mass_clean_kg")
         if not mc or abs(mc - clean_mass_kg) / max(mc, clean_mass_kg) > tol:
             continue
@@ -95,7 +99,9 @@ def find_analog(part_name: str, stamp_sortament: str, clean_mass_kg: Optional[fl
             continue
         hits.append((size, _mass_from_line(line) or e.get("mass_kg"), e.get("drawing_no", "")))
     if not hits:
-        return Analog()
+        return Analog(reason=(f"в базе {n_name} деталей с названием «{name_k}», из них "
+                              f"{n_head} с сортаментом «{head_k}», но масса не сходится (допуск {tol:.0%})"
+                              if n_name else f"в базе нет деталей с названием «{name_k}»"))
     cnt = Counter(_norm_size(h[0]) for h in hits)
     best_key, n_agree = cnt.most_common(1)[0]
     pick = next(h for h in hits if _norm_size(h[0]) == best_key)
