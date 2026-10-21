@@ -373,3 +373,12 @@ def test_allowance_prior_from_db(tmp_path, monkeypatch):
     for _ in range(5):                              # исправления технолога важнее базы
         allowance.record("Труба", 10)
     assert allowance.get("Труба", 10, db)[0] == 10.0
+
+
+def test_crosscheck_cdw_vs_db():
+    from core import crosscheck as cx
+    et = {"result_line": "Лист 4 ГОСТ 19903-2015;\nHxL=865x1005;", "mass_clean_kg": 26.0}
+    assert cx.compare({"material": "Лист 4 ГОСТ 19903-2015;Ст3пс", "mass": "26"}, et) == []
+    assert len(cx.compare({"material": "Лист 6 ГОСТ 19903-2015;Ст3пс", "mass": "40"}, et)) == 2
+    assert cx.missing_clean_mass({"mass": "5,5"}, {"result_line": ""}) == 5.5
+    assert cx.missing_clean_mass({"mass": "5,5"}, et) is None
