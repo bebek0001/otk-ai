@@ -585,6 +585,14 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["stock_mass_kg"]  = stock_mass
             result["zagotovka_full"] = new_sortament
             result["source"]         = "CDW+база"
+            # В файле нет массы детали: берём из записи базы (ответ технолога)
+            if not result.get("clean_mass_kg") and etalon.get("mass_clean_kg"):
+                result["clean_mass_kg"] = _fmt_mass_ru(etalon.get("mass_clean_kg"))
+            # Обозначение из имени файла подтверждено базой (то же наименование):
+            # пометку «проверьте по штампу» снимаем
+            if ("взято из имени файла" in (result.get("note") or "") and db_name
+                    and db_name.strip().lower() == (card.get("name") or "").strip().lower()):
+                result["note"] = ""
             _crosscheck_with_db(result, card, etalon)
             return result
         trace.step("база", "записи по обозначению нет, ищу аналог/контур/размеры")
