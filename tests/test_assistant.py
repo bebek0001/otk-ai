@@ -410,3 +410,31 @@ def test_build_version_reads_file_or_git(tmp_path, monkeypatch):
     assert version.get_build() == "abc1234  2026-10-21 12:00"
     monkeypatch.setattr(version, "_candidates", lambda: iter([tmp_path / "нет.txt"]))
     assert version.get_build()
+
+
+def test_contour_roughness_allowance(monkeypatch):
+    from core import cdw_contour as cc
+    corners = [(-382.5, 70.0), (382.5, 70.0), (-382.5, -70.0), (382.5, -70.0)]
+    monkeypatch.setattr(cc, "_pairs", lambda p: corners)
+    base = ("x.cdw", "Лист 6 ГОСТ 19903-2015", 5.04, 7.9)
+    assert cc.parse_ra("Ra 12,5") == 12.5 and cc.parse_ra("Rz 40") is None and cc.parse_ra("") is None
+    c50 = cc.propose_sheet(*base, ra=50.0)
+    assert (c50.h_mm, c50.l_mm) == (140.0, 765.0) and "без припуска" in c50.note
+    c25 = cc.propose_sheet(*base, ra=25.0)
+    assert (c25.h_mm, c25.l_mm) == (150.0, 775.0)
+    cn = cc.propose_sheet(*base)
+    assert (cn.h_mm, cn.l_mm) == (140.0, 765.0) and "не прочитана" in cn.note
+
+
+def test_fill_marking_from_filename():
+    import sys, types
+    from unittest import mock
+    for m in ("customtkinter", "tkinter", "tkinter.filedialog", "tkinter.messagebox"):
+        sys.modules.setdefault(m, mock.MagicMock())
+    from ui.screens import batch_tool as bt
+    card, res = {}, {}
+    bt._fill_from_filename(card, "/x/935028.01.08.005 Прокладка.cdw", res)
+    assert card["marking"] == "935028.01.08.005" and card["name"] == "Прокладка" and "имени файла" in res["note"]
+    card2, res2 = {"marking": "1.2.3", "name": "Деталь"}, {}
+    bt._fill_from_filename(card2, "/x/файл.cdw", res2)
+    assert not res2

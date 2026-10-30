@@ -449,7 +449,8 @@ def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
         mass_f = float(str(mass).replace(",", ".")) if mass not in (None, "") else None
         dens = card.get("density")
         dens_f = float(str(dens).replace(",", ".")) if dens not in (None, "") else None
-        c = cdw_contour.propose_sheet(cdw_path, mat0, mass_f, dens_f)
+        ra_v = cdw_contour.parse_ra(card.get("roughness", ""))
+        c = cdw_contour.propose_sheet(cdw_path, mat0, mass_f, dens_f, ra_v)
     except Exception as e:                                       # noqa: BLE001
         logger.warn(f"Контур листа не определён: {e}")
         return False
@@ -467,6 +468,33 @@ def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
                        f"{c.note}): проверьте, припуск не учтён")
     result["source"] = "CDW+контур"
     return True
+
+
+_FNAME_RE = re.compile(r"^\s*(\d[\d.\-]*\d)(\s+СБ)?(?:\s+(.+))?$", re.I)
+
+
+def _fill_from_filename(card: dict, cdw_path: str, result: dict) -> None:
+    """Если в свойствах файла нет обозначения или наименования (конструктор
+    заполнил только штамп), берём их из имени файла: «935028.01.08.005 Прокладка.cdw».
+    Строка помечается в Excel, чтобы технолог проверил."""
+    if card.get("marking") and card.get("name"):
+        return
+    stem = os.path.splitext(os.path.basename(cdw_path))[0]
+    m = _FNAME_RE.match(stem)
+    if not m:
+        trace.step("чтение", "в свойствах нет обозначения/наименования, из имени файла не разобрать")
+        return
+    used = []
+    if not card.get("marking"):
+        card["marking"] = m.group(1) + (" СБ" if m.group(2) else "")
+        used.append("обозначение")
+    if not card.get("name") and m.group(3):
+        card["name"] = m.group(3).strip()
+        used.append("наименование")
+    if used:
+        result["note"] = f"{' и '.join(used).capitalize()} взято из имени файла: проверьте по штампу"
+        trace.step("чтение", f"в свойствах файла пусто, {' и '.join(used)} взято из имени файла",
+                   marking=card.get("marking"), name=card.get("name"))
 
 
 def _propose_from_dims(cdw_path: str, card: dict):
@@ -505,6 +533,7 @@ def process_one_cdw(cdw_path: str) -> dict:
         ex   = cdw_bridge.extract_from_cdw(cdw_path)
         result["_raw_text"] = getattr(ex, "pdf_text", "") or ""
         card = getattr(ex, "cdw_card", {}) or {}
+        _fill_from_filename(card, cdw_path, result)
 
         result["drawing_no"]    = card.get("marking", "")
         result["part_name"]     = card.get("name", "") or os.path.splitext(name)[0]

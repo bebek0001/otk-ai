@@ -80,7 +80,8 @@ def rows_for_client(results: List[Dict[str, Any]], include_errors: bool = True):
             # помеченными: технолог видит, что ответ не подтверждён, а импорт
             # «Обучения» не принимает такие строки в базу без снятия пометки
             proposal = ok and r.get("status") != "ОК"
-            row.append((r.get("error") or r.get("status", "")) if (proposal or not ok) else "")
+            row.append((r.get("error") or r.get("status", "")) if (proposal or not ok)
+                       else (r.get("note") or ""))
         rows.append(row)
     return rows
 
