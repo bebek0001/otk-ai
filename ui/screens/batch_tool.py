@@ -444,7 +444,14 @@ def _crosscheck_with_db(result: dict, card: dict, etalon: dict) -> None:
     try:
         from core import crosscheck
         notes = crosscheck.compare(card, etalon)
-        trace.step("сверка с базой", "; ".join(notes) if notes else "штамп и база согласованы")
+        from_tech = etalon.get("source") == "excel_import"
+        if notes and from_tech:
+            # Запись проверена технологом: его ответ главный, расхождение со штампом
+            # остаётся только в журнале и не превращается в ошибку строки
+            trace.step("сверка с базой", "расхождение со штампом (ответ технолога главный): " + "; ".join(notes))
+            notes = []
+        else:
+            trace.step("сверка с базой", "; ".join(notes) if notes else "штамп и база согласованы")
         if notes:
             result["status"] = STATUS_DB_MISMATCH
             result["error"] = "Данные чертежа и базы расходятся: " + "; ".join(notes) + ". Проверьте"
@@ -605,7 +612,8 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["zagotovka_full"] = new_sortament
             result["source"]         = "CDW+база"
             # В файле нет массы детали: берём из записи базы (ответ технолога)
-            if not result.get("clean_mass_kg") and etalon.get("mass_clean_kg"):
+            if etalon.get("mass_clean_kg") and (
+                    not result.get("clean_mass_kg") or etalon.get("source") == "excel_import"):
                 result["clean_mass_kg"] = _fmt_mass_ru(etalon.get("mass_clean_kg"))
             # Обозначение из имени файла подтверждено базой (то же наименование):
             # пометку «проверьте по штампу» снимаем
