@@ -319,6 +319,17 @@ def read_cdw(path: str | Path) -> dict[str, Any]:
                     doc = cand
                     break
             if doc is None:
+                # вариант без mainSource: документ, на который указывает
+                # <product thisDocument="id">
+                for prod in root.iter("product"):
+                    tid = prod.get("thisDocument")
+                    for cand in prod.iter("document"):
+                        if tid and cand.get("id") == tid:
+                            doc = cand
+                            break
+                    if doc is not None:
+                        break
+            if doc is None:
                 res["error"] = "В MetaProductInfo не найден основной документ"
                 return res
 

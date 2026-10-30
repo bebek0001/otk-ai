@@ -35,7 +35,8 @@ from typing import List, Optional, Tuple
 from core import cdw_geometry
 
 # Служебная приставка перед координатной парой размера (стиль размерной линии)
-_DIM_MARK = bytes.fromhex("00001626")
+_DIM_MARKS = tuple(bytes.fromhex(h) for h in ("00001626", "0000152e", "1000141c"))
+_DIM_MARK = _DIM_MARKS[0]
 
 MIN_LEN_MM = 10.0
 MAX_LEN_MM = 12000.0
@@ -62,7 +63,7 @@ def dimension_values(path: str | Path) -> List[float]:
     for b in chunks:
         i = b.find(cdw_geometry.TAG_COORD)
         while i >= 0:
-            if i >= 14 and b[i - 14:i - 10] == _DIM_MARK and i + 18 <= len(b):
+            if i >= 14 and b[i - 14:i - 10] in _DIM_MARKS and i + 18 <= len(b):
                 x, y = struct.unpack_from("<dd", b, i + 2)
                 if cdw_geometry._finite(x) and cdw_geometry._finite(y):
                     for v in (abs(x), abs(y)):
@@ -218,7 +219,10 @@ def propose_length(section: Section, dims: List[float], clean_mass_kg: float,
     prop.candidates = ok
     chosen = ok[0]
     prop.part_length_mm = chosen
-    prop.blank_length_mm = _round_to(chosen + allowance_mm)
+    # Нулевой (выученный) припуск: технолог пишет точную длину детали,
+    # округление до 5 мм её бы испортило
+    step = ROUND_TO_MM if (allowance_mm > 0 and allowance_mm % ROUND_TO_MM == 0) else 1.0
+    prop.blank_length_mm = _round_to(chosen + allowance_mm, step)
     prop.blank_mass_kg = blank_mass_kg(section, prop.blank_length_mm, density_kg_m3)
     ratio = (prop.blank_mass_kg / clean_mass_kg) if (prop.blank_mass_kg and clean_mass_kg) else 99
     prop.confidence = "высокая" if (len(ok) == 1 and ratio <= HIGH_CONF_MAX_RATIO) else "низкая"
