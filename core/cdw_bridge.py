@@ -201,7 +201,10 @@ def extract_from_cdw(cdw_path: str) -> Extracted:
         )
 
     card = cdw_reader.read_cdw(cdw_path)
-    if not card.get("ok"):
+    if not card.get("ok") and not (
+            card.get("error") == "Обозначение и наименование пусты" and card.get("kompas")):
+        # Файл прочитан, но обозначение и наименование не заполнены в свойствах:
+        # их возьмёт из имени файла вызывающий код (batch_tool)
         raise ValueError(card.get("error") or "CDW не разобран")
 
     try:

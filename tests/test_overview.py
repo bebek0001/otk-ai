@@ -19,3 +19,13 @@ def test_pipeline_and_tables():
     assert overview.pipeline_text()
     assert isinstance(overview.allowance_table(), list)
     assert isinstance(overview.agent_table(), list)
+
+
+def test_crosscheck_tolerates_stamp_rounding():
+    from core import crosscheck as c
+    e = lambda m, l: {"mass_clean_kg": m, "result_line": l}
+    assert c.compare({"material": "Ст3пс ГОСТ 380-2005", "mass": 0.1}, e(0.115, "Лист 40 ГОСТ 19903-2015;")) == []
+    assert c.compare({"material": "Лист 4 ГОСТ 1", "mass": 0.3}, e(0.245, "Лист 4 ГОСТ 1;")) == []
+    assert c.compare({"material": "Лист А5.М 1,5 ГОСТ 1", "mass": 0.3}, e(0.3, "Лист А5М 1,5 ГОСТ 1;")) == []
+    assert c.compare({"material": "Лист 4 ГОСТ 1", "mass": 62}, e(49.649, "Лист 4 ГОСТ 1;"))
+    assert c.compare({"material": "Круг 30 ГОСТ 1", "mass": 0.3}, e(0.3, "Лист 4 ГОСТ 1;"))
