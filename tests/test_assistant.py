@@ -303,17 +303,24 @@ def test_import_client_header_and_sheet_size(tmp_path, monkeypatch):
     assert "62x108" in r["result_line"]
 
 
-def test_analog_found_for_series_and_rejected_for_other_mass():
+def test_analog_found_by_gabarit_not_by_name():
     from core import analogs
-    def et(no, mc, size="HxL=865x1005"):
-        return {"drawing_no": no, "part_name": "Стенка", "mass_clean_kg": mc, "mass_kg": 27.3,
+    def et(no, mc, size="HxL=865x1005", name="Стенка"):
+        return {"drawing_no": no, "part_name": name, "mass_clean_kg": mc, "mass_kg": 27.3,
                 "result_line": f"Лист 4 ГОСТ 19903-2015;\n{size};\nМасса заготовки, кг: 27,30"}
-    db = [et("1", 26.0), et("2", 26.8)]
-    a = analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "9")
+    db = [et("1", 26.0), et("2", 26.8, name="Совсем другое имя")]
+    dims = (860.0, 1000.0)
+    a = analogs.find_analog("Любое", "Лист 4 ГОСТ 19903-2015", 26.0, db, "9", part_dims=dims)
     assert a.n == 2 and a.size_text == "HxL=865x1005" and a.confidence == "высокая"
-    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 3.6, db, "9").n == 0   # масса другая
-    assert analogs.find_analog("Стенка", "Лист 6 ГОСТ 19903-2015", 26.0, db, "9").n == 0  # другая толщина
-    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "1").n == 1  # сам себе не аналог
+    # габарит детали не помещается в заготовку / заготовка слишком велика: аналога нет
+    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "9", part_dims=(900.0, 1100.0)).n == 0
+    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "9", part_dims=(400.0, 500.0)).n == 0
+    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 3.6, db, "9", part_dims=dims).n == 0   # масса другая
+    assert analogs.find_analog("Стенка", "Лист 6 ГОСТ 19903-2015", 26.0, db, "9", part_dims=dims).n == 0  # другая толщина
+    assert analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db, "1", part_dims=dims).n == 1  # сам себе не аналог
+    # без габаритов: допуск по массе вдвое жёстче, уверенность низкая
+    b = analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, db[:1], "9")
+    assert b.n == 1 and b.confidence == "низкая"
 
 
 def test_allowance_is_learned_only_when_consistent(tmp_path, monkeypatch):
@@ -399,7 +406,7 @@ def test_trace_writes_and_exports(tmp_path, monkeypatch):
 def test_analog_reason_and_contour_debug():
     from core import analogs
     a = analogs.find_analog("Стенка", "Лист 4 ГОСТ 19903-2015", 26.0, [], "1")
-    assert not a.n and "нет деталей" in a.reason
+    assert not a.n and "подходящей заготовки нет" in a.reason
 
 
 def test_build_version_reads_file_or_git(tmp_path, monkeypatch):

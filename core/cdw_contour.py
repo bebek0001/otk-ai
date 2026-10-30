@@ -179,3 +179,30 @@ def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
                                method=method, confidence=conf,
                                note=f"масса габарита/чистая = {ratio:.2f}; {ra_note}")
     return None
+
+
+def part_gabarit(path, sortament_head: str, clean_mass_kg: Optional[float],
+                 density: Optional[float] = None) -> Optional[Tuple[float, float, str]]:
+    """Габарит детали-листа (a <= b, мм) без припуска и округления: тот же
+    отбор по массе, что и в propose_sheet. Нужен для поиска аналога по габаритам."""
+    t = sheet_thickness(sortament_head)
+    if not t or not clean_mass_kg or clean_mass_kg <= 0:
+        return None
+    rho = density if density and 1 < density < 25 else DENSITY_DEFAULT
+    pts = _pairs(path)
+    if not pts:
+        return None
+    cand = []
+    r = _largest_rect(pts)
+    if r:
+        cand.append((r, "прямоугольник", RECT_MASS_RANGE))
+    bb = _bbox_nonzero(pts)
+    if bb:
+        cand.append((bb, "габарит точек", BBOX_MASS_RANGE))
+    for (a, b), method, (lo, hi) in cand:
+        if a < 5 or b < 5:
+            continue
+        if lo <= a * b * t * rho * 1e-6 / clean_mass_kg <= hi:
+            x, y = sorted((float(a), float(b)))
+            return x, y, method
+    return None

@@ -384,7 +384,7 @@ def _sortament_from_library(card: dict) -> str:
 STATUS_ANALOG = "⚠ аналог: проверить"
 
 
-def _apply_analog(result: dict, card: dict) -> bool:
+def _apply_analog(result: dict, card: dict, cdw_path: str = "") -> bool:
     """Размер заготовки у аналога из базы (то же наименование, сортамент и масса).
     Ответ только предложение: технолог подтверждает его в таблице."""
     try:
@@ -392,8 +392,27 @@ def _apply_analog(result: dict, card: dict) -> bool:
         mat0 = (card.get("material") or "").split(";")[0].strip()
         mass = card.get("mass")
         mass_f = float(str(mass).replace(",", ".")) if mass not in (None, "") else None
+        # Габариты детали: контур листа или длина по размерам чертежа. Наименование
+        # в поиске не участвует.
+        part_dims = part_len = None
+        try:
+            from core import cdw_contour
+            g = cdw_contour.part_gabarit(cdw_path, analogs.sort_head(mat0), mass_f, card.get("density"))
+            if g:
+                part_dims = (g[0], g[1])
+            else:
+                sec = cdw_dims.parse_section(mat0)
+                if sec and sec.kind != "Лист" and mass_f:
+                    pr = cdw_dims.propose_length(sec, cdw_dims.dimension_values(cdw_path), mass_f,
+                                                 float(card.get("density") or 7850.0), 0.0)
+                    part_len = pr.part_length_mm
+        except Exception as e:                                   # noqa: BLE001
+            logger.warn(f"Габариты для поиска аналога не получены: {e}")
+        trace.step("аналог", (f"габарит детали {part_dims[0]:g}x{part_dims[1]:g}" if part_dims else
+                              (f"длина детали {part_len:g}" if part_len else "габаритов детали нет, допуск по массе вдвое жёстче")))
         a = analogs.find_analog(card.get("name", ""), mat0, mass, drawing_db.load_db(),
-                                drawing_no=card.get("marking", ""))
+                                drawing_no=card.get("marking", ""),
+                                part_dims=part_dims, part_length=part_len)
     except Exception as e:                                       # noqa: BLE001
         logger.warn(f"Поиск аналога не удался: {e}")
         return False
@@ -607,7 +626,7 @@ def process_one_cdw(cdw_path: str) -> dict:
             result["source"] = "CDW"
             return result
         if not ex.length_mm or ex.length_mm <= 0:
-            if _apply_analog(result, card):
+            if _apply_analog(result, card, cdw_path):
                 _register_case(cdw_path, ex, result, result["error"])
                 return result
             if _apply_contour(result, card, cdw_path):
