@@ -27,12 +27,26 @@ def begin(path: str) -> None:
     _local.name = os.path.basename(path or "")
 
 
+def collect_start() -> None:
+    """Начать сбор этапов текущего потока в памяти (для вкладки «Обзор»)."""
+    _local.steps = []
+
+
+def collect_end() -> list:
+    steps = getattr(_local, "steps", None) or []
+    _local.steps = None
+    return steps
+
+
 def current() -> str:
     return getattr(_local, "name", "")
 
 
 def step(stage: str, msg: str = "", **data: Any) -> None:
     name = current()
+    buf = getattr(_local, "steps", None)
+    if buf is not None:
+        buf.append((stage, msg))
     try:
         logger.info(f"[{name}] {stage}: {msg}" if msg else f"[{name}] {stage}")
         rec = {"t": datetime.now().isoformat(timespec="seconds"),

@@ -151,6 +151,7 @@ class Sidebar(ctk.CTkFrame):
             ("КОМПАС",          "kompas"),
             ("Очередь подтверждения", "confirm_queue"),
             ("Помощник технолога", "assistant"),
+            ("Обзор",           "overview"),
             ("Настройки",       "settings"),
         ]
 
@@ -265,6 +266,9 @@ class App(ctk.CTk):
             self.current = ConfirmQueueScreen(self.content)
         elif key == "assistant":
             self.current = AssistantScreen(self.content)
+        elif key == "overview":
+            from ui.screens.overview_screen import OverviewScreen
+            self.current = OverviewScreen(self.content)
         elif key == "settings":
             self.current = SettingsScreen(self.content)
         else:

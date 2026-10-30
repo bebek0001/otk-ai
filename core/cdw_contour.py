@@ -39,6 +39,18 @@ ROUND_TO_MM = 1.0
 last_debug: list = []        # причины отказа последнего вызова (для журнала)
 
 
+# Правило заказчика (письмо 22.10): листовые детали режутся лазером без припуска
+# по периметру при Ra 50 и грубее; при Ra 25 и точнее добавляется 5 мм на сторону.
+RA_ALLOWANCE_MAX = 25.0
+SIDE_ALLOWANCE_MM = 5.0
+
+
+def parse_ra(text: str) -> Optional[float]:
+    """«Ra 12,5» -> 12.5; Rz и пустое значение дают None."""
+    m = re.search(r"Ra\s*(\d+(?:[.,]\d+)?)", text or "", re.I)
+    return float(m.group(1).replace(",", ".")) if m else None
+
+
 @dataclass
 class ContourSize:
     h_mm: float = 0.0
@@ -98,8 +110,32 @@ def sheet_thickness(sortament_head: str) -> Optional[float]:
     return float(m.group(1).replace(",", ".")) if m else None
 
 
+def describe(path, sortament_head: str, clean_mass_kg: Optional[float],
+             density: Optional[float] = None) -> List[str]:
+    """Что программа видит в геометрии листа: кандидаты габарита и проверка по массе."""
+    pts = _pairs(path)
+    t = sheet_thickness(sortament_head)
+    rho = density if density and 1 < density < 25 else DENSITY_DEFAULT
+    out = [f"Координатных пар в файле: {len(pts)}"]
+    for title, fn in (("Наибольший прямоугольник из углов", _largest_rect),
+                      ("Габарит точек с ненулевыми координатами", _bbox_nonzero)):
+        r = fn(pts) if pts else None
+        if not r:
+            out.append(f"{title}: не найден")
+            continue
+        a, b = sorted((round(r[0], 1), round(r[1], 1)))
+        line = f"{title}: {a:g} x {b:g} мм"
+        if t and clean_mass_kg:
+            m = a * b * t * rho * 1e-6
+            line += f", масса листа {m:.3f} кг, к чистой массе {m / clean_mass_kg:.2f}"
+        out.append(line)
+    if not t:
+        out.append("Толщина листа не определена (сортамент не «Лист»): контур не применяется")
+    return out
+
+
 def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
-                  density: Optional[float] = None) -> Optional[ContourSize]:
+                  density: Optional[float] = None, ra: Optional[float] = None) -> Optional[ContourSize]:
     last_debug.clear()
     t = sheet_thickness(sortament_head)
     if not t or not clean_mass_kg or clean_mass_kg <= 0:
@@ -129,9 +165,17 @@ def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
         ratio = mass(a, b) / clean_mass_kg
         last_debug.append(f"{method} {a:g}x{b:g}: масса габарита/чистая {ratio:.2f}, нужно {lo}-{hi}")
         if lo <= ratio <= hi:
-            h, l = sorted((round(a / ROUND_TO_MM) * ROUND_TO_MM,
-                           round(b / ROUND_TO_MM) * ROUND_TO_MM))
+            add = 0.0
+            ra_note = "шероховатость не прочитана, припуск не добавлен"
+            if ra is not None:
+                if ra <= RA_ALLOWANCE_MAX:
+                    add = 2 * SIDE_ALLOWANCE_MM
+                    ra_note = f"Ra {ra:g} (точнее Ra 25): припуск {SIDE_ALLOWANCE_MM:g} мм на сторону"
+                else:
+                    ra_note = f"Ra {ra:g}: без припуска"
+            h, l = sorted((round(a / ROUND_TO_MM) * ROUND_TO_MM + add,
+                           round(b / ROUND_TO_MM) * ROUND_TO_MM + add))
             return ContourSize(h_mm=h, l_mm=l, blank_mass_kg=round(mass(h, l), 3),
                                method=method, confidence=conf,
-                               note=f"масса габарита/чистая = {ratio:.2f}")
+                               note=f"масса габарита/чистая = {ratio:.2f}; {ra_note}")
     return None
