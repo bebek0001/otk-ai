@@ -346,7 +346,7 @@ def test_contour_sheet_size_and_mass_gate(monkeypatch):
     corners = [(-382.5, 70.0), (382.5, 70.0), (-382.5, -70.0), (382.5, -70.0), (-305.0, 26.0)]
     monkeypatch.setattr(cc, "_pairs", lambda p: corners)
     c = cc.propose_sheet("x.cdw", "Лист 6 ГОСТ 19903-2015", 5.04, 7.9)
-    assert c and (c.h_mm, c.l_mm) == (140.0, 765.0) and c.method == "прямоугольник"
+    assert c and (c.h_mm, c.l_mm) == (140.0, 765.0) and c.method in ("прямоугольник", "габарит контура")
     # масса не сходится (деталь втрое легче габарита): предложения нет
     assert cc.propose_sheet("x.cdw", "Лист 6", 1.5, 7.9) is None
     assert cc.propose_sheet("x.cdw", "Круг 30", 5.04, 7.9) is None

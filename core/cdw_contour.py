@@ -105,6 +105,46 @@ def _bbox_nonzero(pts) -> Optional[Tuple[float, float]]:
             max(b for _, b in q) - min(b for _, b in q))
 
 
+# Каскад кандидатов (подобран на 186 листах с ответами технолога). В файле, кроме
+# контура детали, лежат координаты рамки и текста штампа (сотни и тысячи мм):
+# они раздувают габарит, поэтому сначала берутся только точки в пределах T.
+# (способ, предел T мм, диапазон массы габарита/чистой, уверенность).
+# Точность на этих листах: «высокая» 29 из 31, «средняя» 15 из 37; шаг с диапазоном 0.9-1.5
+# давал лишь 6 из 25 и убран.
+CASCADE = [
+    ("габарит контура", 600.0, (0.98, 1.10), "высокая"),
+    ("габарит контура", 1000.0, (0.98, 1.10), "высокая"),
+    ("габарит контура", 4000.0, (0.98, 1.10), "высокая"),
+    ("прямоугольник", 600.0, (0.90, 1.30), "средняя"),
+    ("прямоугольник", 1e9, (0.90, 1.30), "средняя"),
+]
+
+
+def _trim(pts, limit: float):
+    return [(x, y) for x, y in pts if abs(x) <= limit and abs(y) <= limit]
+
+
+def _candidates(pts, t: float, rho: float, clean_mass_kg: float):
+    """Подходящие кандидаты габарита по порядку каскада:
+    [((a, b) по возрастанию, способ, уверенность, отношение масс, пояснение)]."""
+    out = []
+    seen = set()
+    for method, limit, (lo, hi), conf in CASCADE:
+        sub = _trim(pts, limit)
+        r = _largest_rect(sub) if method == "прямоугольник" else _bbox_nonzero(sub)
+        if not r or min(r) < 5:
+            continue
+        a, b = sorted((round(r[0], 1), round(r[1], 1)))
+        ratio = a * b * t * rho * 1e-6 / clean_mass_kg
+        last_debug.append(f"{method} (точки до {limit:g} мм) {a:g}x{b:g}: масса габарита/чистая {ratio:.2f}, "
+                          f"нужно {lo}-{hi}")
+        if lo <= ratio <= hi and (a, b) not in seen:
+            seen.add((a, b))
+            out.append(((a, b), method, conf, ratio))
+    return out
+
+
+
 def sheet_thickness(sortament_head: str) -> Optional[float]:
     m = re.search(r"лист\s*(\d+(?:[.,]\d+)?)", sortament_head or "", re.I)
     return float(m.group(1).replace(",", ".")) if m else None
@@ -150,35 +190,24 @@ def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
     def mass(a, b):
         return a * b * t * rho * 1e-6
 
-    cand = []
-    r = _largest_rect(pts)
-    if r:
-        cand.append((r, "прямоугольник", RECT_MASS_RANGE, "средняя"))
-    bb = _bbox_nonzero(pts)
-    if bb:
-        cand.append((bb, "габарит точек", BBOX_MASS_RANGE, "низкая"))
-    if not cand:
-        last_debug.append("не найден ни прямоугольник из углов, ни габарит точек")
-    for (a, b), method, (lo, hi), conf in cand:
-        if a < 5 or b < 5:
-            continue
-        ratio = mass(a, b) / clean_mass_kg
-        last_debug.append(f"{method} {a:g}x{b:g}: масса габарита/чистая {ratio:.2f}, нужно {lo}-{hi}")
-        if lo <= ratio <= hi:
-            add = 0.0
-            ra_note = "шероховатость не прочитана, припуск не добавлен"
-            if ra is not None:
-                if ra <= RA_ALLOWANCE_MAX:
-                    add = 2 * SIDE_ALLOWANCE_MM
-                    ra_note = f"Ra {ra:g} (точнее Ra 25): припуск {SIDE_ALLOWANCE_MM:g} мм на сторону"
-                else:
-                    ra_note = f"Ra {ra:g}: без припуска"
-            h, l = sorted((round(a / ROUND_TO_MM) * ROUND_TO_MM + add,
-                           round(b / ROUND_TO_MM) * ROUND_TO_MM + add))
-            return ContourSize(h_mm=h, l_mm=l, blank_mass_kg=round(mass(h, l), 3),
-                               method=method, confidence=conf,
-                               note=f"масса габарита/чистая = {ratio:.2f}; {ra_note}")
-    return None
+    cands = _candidates(pts, t, rho, clean_mass_kg)
+    if not cands:
+        last_debug.append("ни один кандидат габарита не подошёл по массе")
+        return None
+    (a, b), method, conf, ratio = cands[0]
+    add = 0.0
+    ra_note = "шероховатость не прочитана, припуск не добавлен"
+    if ra is not None:
+        if ra <= RA_ALLOWANCE_MAX:
+            add = 2 * SIDE_ALLOWANCE_MM
+            ra_note = f"Ra {ra:g} (точнее Ra 25): припуск {SIDE_ALLOWANCE_MM:g} мм на сторону"
+        else:
+            ra_note = f"Ra {ra:g}: без припуска"
+    h, l = sorted((round(a / ROUND_TO_MM) * ROUND_TO_MM + add,
+                   round(b / ROUND_TO_MM) * ROUND_TO_MM + add))
+    return ContourSize(h_mm=h, l_mm=l, blank_mass_kg=round(mass(h, l), 3),
+                       method=method, confidence=conf,
+                       note=f"масса габарита/чистая = {ratio:.2f}; {ra_note}")
 
 
 def part_gabarit(path, sortament_head: str, clean_mass_kg: Optional[float],
@@ -192,17 +221,8 @@ def part_gabarit(path, sortament_head: str, clean_mass_kg: Optional[float],
     pts = _pairs(path)
     if not pts:
         return None
-    cand = []
-    r = _largest_rect(pts)
-    if r:
-        cand.append((r, "прямоугольник", RECT_MASS_RANGE))
-    bb = _bbox_nonzero(pts)
-    if bb:
-        cand.append((bb, "габарит точек", BBOX_MASS_RANGE))
-    for (a, b), method, (lo, hi) in cand:
-        if a < 5 or b < 5:
-            continue
-        if lo <= a * b * t * rho * 1e-6 / clean_mass_kg <= hi:
-            x, y = sorted((float(a), float(b)))
-            return x, y, method
-    return None
+    c = _candidates(pts, t, rho, clean_mass_kg)
+    if not c:
+        return None
+    (a, b), method, _conf, _ratio = c[0]
+    return float(a), float(b), method
