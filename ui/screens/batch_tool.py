@@ -718,11 +718,24 @@ def process_one_cdw(cdw_path: str) -> dict:
 # что реально прочитано (материал, масса), и пишем прямым текстом, что
 # заготовка не определена, а не подставляем случайное число.
 
+def _m3d_card(info) -> dict:
+    """Карточка детали из свойств .m3d в том же виде, что у чертежа CDW."""
+    mat = (info.material or "").replace("$d", " ").replace("$", "")
+    mat = re.sub(r"\s+", " ", mat).strip()
+    return {"marking": info.drawing_no, "name": info.part_name, "material": mat,
+            "mass": info.mass_kg, "density": info.density, "roughness": ""}
+
+
 def process_one_m3d(m3d_path: str) -> dict:
+    """Модель КОМПАС (.m3d): свойства читаются точно (обозначение, наименование,
+    сортамент с толщиной, марка, масса). Дальше та же цепочка, что для чертежа:
+    база по обозначению, аналог по габаритам, контур эскиза. Если ничего не
+    подошло, сортамент и массу отдаём, размер заготовки оставляем пустым."""
     from core.m3d_reader import read_m3d
 
     name = os.path.basename(m3d_path)
     result = _blank_result(m3d_path)
+    trace.step("начало", "модель .m3d: читаются свойства и эскизы")
 
     try:
         info = read_m3d(m3d_path)
@@ -731,11 +744,15 @@ def process_one_m3d(m3d_path: str) -> dict:
             result["error"]  = "Не удалось прочитать .m3d (не ZIP-контейнер КОМПАС, либо нет свойств детали)"
             return result
 
+        card = _m3d_card(info)
         result["_raw_text"]     = info.protocol
         result["drawing_no"]    = info.drawing_no
         result["part_name"]     = info.part_name or os.path.splitext(name)[0]
         result["material"]      = info.material
         result["clean_mass_kg"] = _fmt_mass_ru(info.mass_kg)
+        result["drawing_sortament"] = card["material"]
+        trace.step("чтение", f"обозначение {info.drawing_no}, «{info.part_name}», материал «{card['material']}», "
+                   f"масса {info.mass_kg}, плотность {info.density}")
 
         etalon = None
         marking = (info.drawing_no or "").strip()
@@ -748,60 +765,55 @@ def process_one_m3d(m3d_path: str) -> dict:
                     logger.warn(f"Поиск эталона по обозначению не удался: {e}")
 
         if etalon:
-            db_name = etalon.get("part_name", "")
-            if db_name and not result["part_name"]:
-                result["part_name"] = db_name
-            new_sortament, stock_size, stock_mass = parse_result_line(
-                etalon.get("result_line", "")
-            )
+            trace.step("база", f"найдена запись {etalon.get('drawing_no', '')}: "
+                       f"{(etalon.get('result_line') or '').replace(chr(10), ' | ')}")
+            new_sortament, stock_size, stock_mass = parse_result_line(etalon.get("result_line", ""))
             result["new_sortament"]  = new_sortament
             result["stock_size"]     = stock_size
             result["stock_mass_kg"]  = stock_mass
             result["zagotovka_full"] = new_sortament
             result["source"]         = "M3D+база"
+            if etalon.get("source") == "excel_import" and etalon.get("mass_clean_kg"):
+                result["clean_mass_kg"] = _fmt_mass_ru(etalon.get("mass_clean_kg"))
+            return result
+        trace.step("база", "записи по обозначению нет, ищу аналог/контур эскиза")
+
+        mat0 = card["material"].split(";")[0].strip()
+        if not mat0:
+            result["status"] = "⚠ нет марки"
+            result["error"]  = "Материал в модели не указан"
+            result["source"] = "M3D"
             return result
 
-        # Не нашлось в базе — геометрии в .m3d нет, заготовку определить
-        # нечем. Это не ошибка чтения, а честная граница формата.
-        result["status"] = "⚠ нет геометрии"
-        result["error"]  = (
-            "В .m3d нет геометрии (формат C3D закрыт) — заготовка не "
-            "определена. Материал и масса прочитаны верно. Для полного "
-            "расчёта нужен STEP этой же детали (вкладка «3D инструмент») "
-            "или деталь должна быть в базе эталонов по обозначению."
-        )
+        if _apply_analog(result, card, m3d_path):
+            result["source"] = "M3D+аналог"
+            return result
+        if _apply_contour(result, card, m3d_path):
+            result["source"] = "M3D+контур"
+            return result
+        prop = _propose_from_dims(m3d_path, card)
+        if prop is not None and prop.blank_length_mm:
+            sec = cdw_dims.parse_section(mat0)
+            result["status"] = "⚠ проверить длину"
+            result["new_sortament"] = mat0
+            result["zagotovka_full"] = mat0
+            result["stock_size"] = f"{sec.kind} {'х'.join(f'{v:g}' for v in sec.sizes)}, L={prop.blank_length_mm:g}"
+            result["part_length_mm"] = prop.part_length_mm
+            result["stock_mass_kg"] = _fmt_mass_ru(round(prop.blank_mass_kg, 2))
+            result["error"] = f"Длина предложена по модели ({prop.confidence} уверенность): проверьте"
+            result["source"] = "M3D+размеры"
+            return result
+
+        result["status"] = "⚠ нет длины"
+        result["new_sortament"] = mat0
+        result["error"] = (f"Сортамент «{mat0}» и масса прочитаны из модели; "
+                           "габарит заготовки по эскизам однозначно определить не удалось")
         result["source"] = "M3D"
 
     except Exception as e:
         result["status"] = "❌ ошибка"
         result["error"]  = str(e)[:120]
         logger.error(f"Пакетная обработка M3D: ошибка {name}: {e}")
-
-    return result
-
-
-# ============================================================
-# ИИ-добор для сложных случаев
-# ============================================================
-
-def process_one_pdf_with_ai(pdf_path: str) -> dict:
-    result = process_one_pdf(pdf_path)
-    if result["status"] == "ОК":
-        return result
-
-    try:
-        ex = extract_from_pdf(pdf_path, max_pages=3)
-        pdf_short = ex.pdf_text[-800:].strip() if len(ex.pdf_text) > 800 else ex.pdf_text
-
-        result["drawing_no"]        = result["drawing_no"] or extract_drawing_no(ex.pdf_text)
-        result["drawing_sortament"] = result["drawing_sortament"] or extract_sortament_from_text(ex.pdf_text)
-        result["clean_mass_kg"]     = result["clean_mass_kg"] or extract_clean_mass(ex.pdf_text)
-
-        _apply_ai(result, ex, pdf_short, os.path.basename(pdf_path))
-
-    except Exception as e:
-        result["error"] = f"ИИ: {str(e)[:80]}"
-        logger.error(f"Пакет ИИ ошибка {os.path.basename(pdf_path)}: {e}")
 
     return result
 
