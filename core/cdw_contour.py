@@ -146,7 +146,7 @@ def _candidates(pts, t: float, rho: float, clean_mass_kg: float):
 
 
 def sheet_thickness(sortament_head: str) -> Optional[float]:
-    m = re.search(r"лист\s*(\d+(?:[.,]\d+)?)", sortament_head or "", re.I)
+    m = re.search(r"лист\s*(?:[A-Za-zА-Яа-я][\wА-Яа-я.\-]*\s+)?(\d+(?:[.,]\d+)?)", sortament_head or "", re.I)
     return float(m.group(1).replace(",", ".")) if m else None
 
 
@@ -155,7 +155,7 @@ def describe(path, sortament_head: str, clean_mass_kg: Optional[float],
     """Что программа видит в геометрии листа: кандидаты габарита и проверка по массе."""
     pts = _pairs(path)
     t = sheet_thickness(sortament_head)
-    rho = density if density and 1 < density < 25 else DENSITY_DEFAULT
+    rho = (density / 1000.0 if density and density > 100 else density) if density and 1 < (density / 1000.0 if density > 100 else density) < 25 else DENSITY_DEFAULT
     out = [f"Координатных пар в файле: {len(pts)}"]
     for title, fn in (("Наибольший прямоугольник из углов", _largest_rect),
                       ("Габарит точек с ненулевыми координатами", _bbox_nonzero)):
@@ -181,7 +181,18 @@ def propose_sheet(path, sortament_head: str, clean_mass_kg: Optional[float],
     if not t or not clean_mass_kg or clean_mass_kg <= 0:
         last_debug.append("нет толщины листа или массы детали")
         return None
-    rho = density if density and 1 < density < 25 else DENSITY_DEFAULT
+    rho = (density / 1000.0 if density and density > 100 else density) if density and 1 < (density / 1000.0 if density > 100 else density) < 25 else DENSITY_DEFAULT
+    if str(path).lower().endswith(".m3d"):
+        g = part_gabarit_m3d(path, sortament_head, clean_mass_kg, density)
+        if not g:
+            last_debug.append("в модели не найден контур, подходящий по массе")
+            return None
+        a, b = g[0], g[1]
+        h, l = sorted((a, b))
+        return ContourSize(h_mm=h, l_mm=l, blank_mass_kg=round(a * b * t * rho * 1e-6, 3),
+                           method=g[2],
+                           confidence="высокая" if g[2] == "параметры модели" else "средняя",
+                           note="припуск не добавлен")
     pts = _pairs(path)
     if not pts:
         last_debug.append("в файле нет координатных пар")
@@ -217,7 +228,9 @@ def part_gabarit(path, sortament_head: str, clean_mass_kg: Optional[float],
     t = sheet_thickness(sortament_head)
     if not t or not clean_mass_kg or clean_mass_kg <= 0:
         return None
-    rho = density if density and 1 < density < 25 else DENSITY_DEFAULT
+    rho = (density / 1000.0 if density and density > 100 else density) if density and 1 < (density / 1000.0 if density > 100 else density) < 25 else DENSITY_DEFAULT
+    if str(path).lower().endswith(".m3d"):
+        return part_gabarit_m3d(path, sortament_head, clean_mass_kg, density)
     pts = _pairs(path)
     if not pts:
         return None
@@ -226,3 +239,124 @@ def part_gabarit(path, sortament_head: str, clean_mass_kg: Optional[float],
         return None
     (a, b), method, _conf, _ratio = c[0]
     return float(a), float(b), method
+
+
+# --------------------------------------------------------------------------- #
+#  Модель .m3d: контур из отрезков эскиза
+# --------------------------------------------------------------------------- #
+# В модели нет рамки и штампа, а контур эскиза лежит явными отрезками
+# (x1, y1, x2, y2 подряд после тега 47 08). Отрезки, связанные общими концами,
+# образуют контур; габарит его вершин и есть габарит листовой детали.
+# Выбор среди контуров по массе: площадь габарита не меньше площади детали
+# (масса / (плотность * толщина)) и не более чем в 2.2 раза больше. Берётся
+# контур с наименьшим запасом. Дуги в отрезки не попадают, поэтому у деталей
+# со скруглением габарит может получиться меньше настоящего: такой ответ всегда
+# идёт на проверку.
+
+M3D_AREA_RATIO = (0.95, 2.2)
+
+
+def _segments(path) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    out = set()
+    try:
+        chunks = cdw_geometry.unpack_contents(path)
+    except Exception:                                        # noqa: BLE001
+        return []
+    for b in chunks:
+        i = b.find(cdw_geometry.TAG_COORD)
+        while i >= 0:
+            if i >= 14 and i + 34 <= len(b):
+                v = struct.unpack_from("<4d", b, i + 2)
+                if all(x == x and abs(x) < 1e5 for x in v) and all(abs(t * 1000 - round(t * 1000)) < 1e-6 for t in v):
+                    x1, y1, x2, y2 = (round(t, 3) for t in v)
+                    if (x1, y1) != (x2, y2):
+                        out.add(tuple(sorted(((x1, y1), (x2, y2)))))
+            i = b.find(cdw_geometry.TAG_COORD, i + 1)
+    return list(out)
+
+
+def _drop_diagonals(segs):
+    """Диагонали прямоугольника по двум точкам не являются рёбрами контура."""
+    verts = {p for sg in segs for p in sg}
+    return [(p, q) for p, q in segs
+            if not (p[0] != q[0] and p[1] != q[1] and (p[0], q[1]) in verts and (q[0], p[1]) in verts)]
+
+
+def _component_boxes(segs) -> List[Tuple[float, float]]:
+    adj: dict = {}
+    for p, q in segs:
+        adj.setdefault(p, []).append(q)
+        adj.setdefault(q, []).append(p)
+    seen, boxes = set(), []
+    for v in adj:
+        if v in seen:
+            continue
+        stack, comp = [v], []
+        seen.add(v)
+        while stack:
+            a = stack.pop()
+            comp.append(a)
+            for b in adj[a]:
+                if b not in seen:
+                    seen.add(b)
+                    stack.append(b)
+        if len(comp) >= 3:
+            xs = [p[0] for p in comp]
+            ys = [p[1] for p in comp]
+            boxes.append(tuple(sorted((max(xs) - min(xs), max(ys) - min(ys)))))
+    return boxes
+
+
+def _block_triples(path, t: float) -> dict:
+    """Параметры выдавливания листа: подряд три числа (A, t, B), где t равно
+    толщине листа (в файле с шумом порядка 1e-14). A и B лежат в записи
+    параметрического тела, это габарит заготовки. Возвращает
+    {(мин, макс): сколько раз встретилось}."""
+    out: dict = {}
+    try:
+        chunks = cdw_geometry.unpack_contents(path)
+    except Exception:                                        # noqa: BLE001
+        return out
+    for b in chunks:
+        for shift in range(8):
+            n = (len(b) - shift) // 8
+            if n < 3:
+                continue
+            vals = struct.unpack_from("<%dd" % n, b, shift)
+            for j in range(1, n - 1):
+                if abs(vals[j] - t) < 1e-6:
+                    a, c = vals[j - 1], vals[j + 1]
+                    if all(x == x and t < x <= 5000 and abs(x * 2 - round(x * 2)) < 1e-6 for x in (a, c)):
+                        key = (round(min(a, c), 1), round(max(a, c), 1))
+                        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def part_gabarit_m3d(path, sortament_head: str, clean_mass_kg: Optional[float],
+                     density: Optional[float] = None) -> Optional[Tuple[float, float, str]]:
+    t = sheet_thickness(sortament_head)
+    if not t or not clean_mass_kg or clean_mass_kg <= 0:
+        return None
+    if density and density > 100:
+        density = density / 1000.0
+    rho = (density / 1000.0 if density and density > 100 else density) if density and 1 < (density / 1000.0 if density > 100 else density) < 25 else DENSITY_DEFAULT
+    area_part = clean_mass_kg / (rho * 1e-6 * t)
+    # 1) прямоугольник выдавливания (A, толщина, B) в параметрах модели
+    best_t = None
+    for (a, b), n in _block_triples(path, t).items():
+        ratio = a * b / area_part
+        last_debug.append(f"параметры тела {a:g}x{b:g} (x{n}): площадь/деталь {ratio:.2f}")
+        if 0.95 <= ratio <= 4.0 and (best_t is None or (n, -ratio) > (best_t[0], -best_t[1])):
+            best_t = (n, ratio, a, b)
+    if best_t:
+        return (best_t[2], best_t[3], "параметры модели")
+    lo, hi = M3D_AREA_RATIO
+    best = None
+    for a, b in _component_boxes(_drop_diagonals(_segments(path))):
+        if min(a, b) < 3:
+            continue
+        ratio = a * b / area_part
+        last_debug.append(f"контур эскиза {a:g}x{b:g}: площадь габарита/детали {ratio:.2f}, нужно {lo}-{hi}")
+        if lo <= ratio <= hi and (best is None or ratio < best[0]):
+            best = (ratio, round(a, 1), round(b, 1))
+    return (best[1], best[2], "эскиз модели") if best else None

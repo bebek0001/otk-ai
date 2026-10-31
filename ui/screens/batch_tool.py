@@ -152,7 +152,9 @@ def _fmt_mass_ru(v) -> str:
     if v is None or v == "":
         return ""
     try:
-        s = f"{float(v):.3f}".rstrip("0").rstrip(".")
+        from decimal import Decimal, ROUND_HALF_UP
+        d = Decimal(repr(round(float(v), 6))).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        s = f"{d:f}".rstrip("0").rstrip(".")
         return s.replace(".", ",")
     except (ValueError, TypeError):
         return str(v)
@@ -485,14 +487,22 @@ def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
                           else "предложения нет: " + "; ".join(_cc.last_debug)))
     if c is None:
         return False
-    result["status"] = STATUS_CONTOUR
     result["new_sortament"] = mat0
     result["zagotovka_full"] = mat0
-    result["stock_size"] = f"HxL={c.h_mm:g}x{c.l_mm:g}"
-    result["stock_mass_kg"] = _fmt_mass_ru(c.blank_mass_kg)
-    result["error"] = (f"Размер листа по контуру ({c.confidence} уверенность): "
-                       "нет в базе технолога, проверьте")
-    result["source"] = "CDW+контур"
+    from_model = c.method in ("параметры модели", "эскиз модели")
+    result["stock_size"] = (f"HxL = {c.h_mm:g}x{c.l_mm:g}" if from_model
+                            else f"HxL={c.h_mm:g}x{c.l_mm:g}")
+    result["stock_mass_kg"] = _fmt_mass_ru(round(c.blank_mass_kg, 2) if from_model else c.blank_mass_kg)
+    if c.method == "параметры модели":
+        # габарит прочитан из параметров самой модели и сверен по массе: без пометки
+        result["status"] = "ОК"
+        result["error"] = ""
+        result["source"] = "M3D"
+    else:
+        result["status"] = STATUS_CONTOUR
+        result["error"] = (f"Размер листа по контуру ({c.confidence} уверенность): "
+                           "нет в базе технолога, проверьте")
+        result["source"] = "CDW+контур"
     return True
 
 
@@ -726,9 +736,9 @@ def _m3d_card(info) -> dict:
             "mass": info.mass_kg, "density": info.density, "roughness": ""}
 
 
-# Порядок для модели: ответ технолога из базы (если деталь там есть), иначе
-# чтение габарита из самого файла. False: только по файлу, без базы и аналогов.
-M3D_USE_BASE = True
+# Модель читается только по своему содержимому (габарит из параметров модели,
+# сверка по массе). True: сначала ответ технолога из базы, потом чтение файла.
+M3D_USE_BASE = False
 
 
 def process_one_m3d(m3d_path: str) -> dict:
@@ -794,7 +804,8 @@ def process_one_m3d(m3d_path: str) -> dict:
             result["source"] = "M3D+аналог"
             return result
         if _apply_contour(result, card, m3d_path):
-            result["source"] = "M3D+контур"
+            if result["source"] != "M3D":
+                result["source"] = "M3D+контур"
             return result
         prop = _propose_from_dims(m3d_path, card)
         if prop is not None and prop.blank_length_mm:
