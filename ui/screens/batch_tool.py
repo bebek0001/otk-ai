@@ -487,14 +487,17 @@ def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
                           else "предложения нет: " + "; ".join(_cc.last_debug)))
     if c is None:
         return False
-    result["new_sortament"] = mat0
-    result["zagotovka_full"] = mat0
     from_model = c.method in ("параметры модели", "эскиз модели")
+    mat_show = re.sub(r"\s*;\s*", "/ ", (card.get("material") or mat0).strip()) if from_model else mat0
+    result["new_sortament"] = mat_show
+    result["zagotovka_full"] = mat_show
+    if from_model:
+        result["drawing_sortament"] = ""      # то же самое уже в «Заготовка»
     result["stock_size"] = (f"HxL = {c.h_mm:g}x{c.l_mm:g}" if from_model
                             else f"HxL={c.h_mm:g}x{c.l_mm:g}")
     result["stock_mass_kg"] = _fmt_mass_ru(round(c.blank_mass_kg, 2) if from_model else c.blank_mass_kg)
-    if c.method == "параметры модели":
-        # габарит прочитан из параметров самой модели и сверен по массе: без пометки
+    if from_model:
+        # размер прочитан из самой модели: строка без пометок, как есть
         result["status"] = "ОК"
         result["error"] = ""
         result["source"] = "M3D"
