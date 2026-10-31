@@ -490,8 +490,8 @@ def _apply_contour(result: dict, card: dict, cdw_path: str) -> bool:
     result["zagotovka_full"] = mat0
     result["stock_size"] = f"HxL={c.h_mm:g}x{c.l_mm:g}"
     result["stock_mass_kg"] = _fmt_mass_ru(c.blank_mass_kg)
-    result["error"] = (f"Размер листа по контуру чертежа ({c.method}, {c.confidence} уверенность; "
-                       f"{c.note}): проверьте, припуск не учтён")
+    result["error"] = (f"Размер листа по контуру ({c.confidence} уверенность): "
+                       "нет в базе технолога, проверьте")
     result["source"] = "CDW+контур"
     return True
 
@@ -726,6 +726,11 @@ def _m3d_card(info) -> dict:
             "mass": info.mass_kg, "density": info.density, "roughness": ""}
 
 
+# Порядок для модели: ответ технолога из базы (если деталь там есть), иначе
+# чтение габарита из самого файла. False: только по файлу, без базы и аналогов.
+M3D_USE_BASE = True
+
+
 def process_one_m3d(m3d_path: str) -> dict:
     """Модель КОМПАС (.m3d): свойства читаются точно (обозначение, наименование,
     сортамент с толщиной, марка, масса). Дальше та же цепочка, что для чертежа:
@@ -748,7 +753,7 @@ def process_one_m3d(m3d_path: str) -> dict:
         result["_raw_text"]     = info.protocol
         result["drawing_no"]    = info.drawing_no
         result["part_name"]     = info.part_name or os.path.splitext(name)[0]
-        result["material"]      = info.material
+        result["material"]      = card["material"]      # без служебных «$d…$» из КОМПАС
         result["clean_mass_kg"] = _fmt_mass_ru(info.mass_kg)
         result["drawing_sortament"] = card["material"]
         trace.step("чтение", f"обозначение {info.drawing_no}, «{info.part_name}», материал «{card['material']}», "
@@ -756,7 +761,7 @@ def process_one_m3d(m3d_path: str) -> dict:
 
         etalon = None
         marking = (info.drawing_no or "").strip()
-        if marking:
+        if marking and M3D_USE_BASE:
             finder = getattr(drawing_db, "lookup_by_drawing_no", None)
             if finder:
                 try:
@@ -785,7 +790,7 @@ def process_one_m3d(m3d_path: str) -> dict:
             result["source"] = "M3D"
             return result
 
-        if _apply_analog(result, card, m3d_path):
+        if M3D_USE_BASE and _apply_analog(result, card, m3d_path):
             result["source"] = "M3D+аналог"
             return result
         if _apply_contour(result, card, m3d_path):
@@ -806,8 +811,7 @@ def process_one_m3d(m3d_path: str) -> dict:
 
         result["status"] = "⚠ нет длины"
         result["new_sortament"] = mat0
-        result["error"] = (f"Сортамент «{mat0}» и масса прочитаны из модели; "
-                           "габарит заготовки по эскизам однозначно определить не удалось")
+        result["error"] = "Размер заготовки по модели однозначно не определён"
         result["source"] = "M3D"
 
     except Exception as e:
