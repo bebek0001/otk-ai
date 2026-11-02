@@ -272,6 +272,45 @@ def read_m3d(path: str) -> Optional[M3DInfo]:
     return info
 
 
+def embodiments(path: str) -> list:
+    """Исполнения детали в модели: список словарей
+    {drawing_no, part_name, material, mass_kg, density}. Первое исполнение
+    идёт без суффикса, остальные с «-01», «-02». Пусто, если модель
+    без блока исполнений."""
+    xml_txt = _read_meta_xml(path)
+    if not xml_txt:
+        return []
+    try:
+        root = ET.fromstring(xml_txt)
+    except Exception:                                        # noqa: BLE001
+        return []
+    out = []
+    for elem in root.iter("infObject"):
+        if elem.attrib.get("type") != "embodiment":
+            continue
+        p = _props_of(elem)
+        mat = p.get("material")
+        if not isinstance(mat, dict):
+            continue
+        mk = p.get("marking") if isinstance(p.get("marking"), dict) else {}
+        no = str(mk.get("base", "")).strip()
+        num = str(mk.get("embodimentNumber", "")).strip()
+        if no and num:
+            no = f"{no}{mk.get('embodimentDelimiter', '-')}{num}"
+        try:
+            mass = round(float(p.get("mass")), 6) if p.get("mass") else None
+        except (TypeError, ValueError):
+            mass = None
+        try:
+            dens = float(mat.get("density")) if mat.get("density") else None
+        except (TypeError, ValueError):
+            dens = None
+        out.append({"drawing_no": no, "part_name": str(p.get("name", "")).strip(),
+                    "material": re.sub(r"\s+", " ", str(mat.get("name", ""))).strip(),
+                    "mass_kg": mass, "density": dens})
+    return out
+
+
 def find_m3d_for(step_path: str) -> Optional[str]:
     """
     Ищет .m3d рядом со STEP-файлом (по совпадению имени).

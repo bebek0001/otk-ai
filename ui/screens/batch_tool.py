@@ -744,16 +744,47 @@ def _m3d_card(info) -> dict:
 M3D_USE_BASE = False
 
 
-def process_one_m3d(m3d_path: str) -> dict:
-    """Модель КОМПАС (.m3d): свойства читаются точно (обозначение, наименование,
-    сортамент с толщиной, марка, масса). Дальше та же цепочка, что для чертежа:
-    база по обозначению, аналог по габаритам, контур эскиза. Если ничего не
-    подошло, сортамент и массу отдаём, размер заготовки оставляем пустым."""
+def _fmt_blank_mass(v) -> str:
+    """Масса заготовки: два знака, округление половины вверх, без хвостовых нулей."""
+    from decimal import Decimal, ROUND_HALF_UP
+    q = Decimal(repr(round(float(v), 6))).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    return format(q.normalize(), "f").replace(".", ",") if q != q.to_integral() else str(int(q))
+
+
+def _fill_from_stock(result: dict, card: dict, stock, info) -> None:
+    """Строка по заготовке, прочитанной из самой модели."""
+    mat_show = re.sub(r"\s*;\s*", "/ ", (card.get("material") or "").strip())
+    result["new_sortament"] = mat_show
+    result["zagotovka_full"] = mat_show
+    result["drawing_sortament"] = ""          # то же самое уже в «Заготовка»
+    result["stock_size"] = stock.size_text
+    if stock.blank_mass_kg is not None:
+        result["stock_mass_kg"] = _fmt_blank_mass(stock.blank_mass_kg)
+    result["source"] = "M3D"
+    if stock.method == "эскиз модели":
+        result["status"] = STATUS_CONTOUR
+        result["error"] = "Размер листа по эскизу модели (средняя уверенность): проверьте"
+        return
+    result["status"] = "ОК"
+    result["error"] = ""
+    mm, bm = info.mass_kg, stock.blank_mass_kg
+    if mm and bm and mm > bm * 1.005:
+        result["error"] = (f"Масса в модели ({_fmt_mass_ru(mm)}) больше массы заготовки "
+                           f"({_fmt_mass_ru(round(bm, 3))})")
+
+
+def process_one_m3d(m3d_path: str, emb: dict = None, base=None) -> dict:
+    """Модель КОМПАС (.m3d) читается по своему содержимому: свойства (обозначение,
+    наименование, сортамент, марка, масса) и габарит тела (core.m3d_stock).
+    emb: одно из исполнений модели (-01, -02), base: заготовка основного
+    исполнения, чья геометрия общая для всех. Результат: словарь строки; сама
+    заготовка лежит в result["_stock"] для следующих исполнений."""
     from core.m3d_reader import read_m3d
+    from core import m3d_stock
 
     name = os.path.basename(m3d_path)
     result = _blank_result(m3d_path)
-    trace.step("начало", "модель .m3d: читаются свойства и эскизы")
+    trace.step("начало", "модель .m3d: читаются свойства и габарит тела")
 
     try:
         info = read_m3d(m3d_path)
@@ -761,6 +792,12 @@ def process_one_m3d(m3d_path: str) -> dict:
             result["status"] = "❌ ошибка"
             result["error"]  = "Не удалось прочитать .m3d (не ZIP-контейнер КОМПАС, либо нет свойств детали)"
             return result
+        if emb:
+            info.drawing_no = emb.get("drawing_no") or info.drawing_no
+            info.part_name = emb.get("part_name") or info.part_name
+            info.material = emb.get("material") or info.material
+            info.mass_kg = emb.get("mass_kg") or info.mass_kg
+            info.density = emb.get("density") or info.density
 
         card = _m3d_card(info)
         result["_raw_text"]     = info.protocol
@@ -794,7 +831,6 @@ def process_one_m3d(m3d_path: str) -> dict:
             if etalon.get("source") == "excel_import" and etalon.get("mass_clean_kg"):
                 result["clean_mass_kg"] = _fmt_mass_ru(etalon.get("mass_clean_kg"))
             return result
-        trace.step("база", "записи по обозначению нет, ищу аналог/контур эскиза")
 
         mat0 = card["material"].split(";")[0].strip()
         if not mat0:
@@ -806,25 +842,28 @@ def process_one_m3d(m3d_path: str) -> dict:
         if M3D_USE_BASE and _apply_analog(result, card, m3d_path):
             result["source"] = "M3D+аналог"
             return result
-        if _apply_contour(result, card, m3d_path):
-            if result["source"] != "M3D":
-                result["source"] = "M3D+контур"
-            return result
-        prop = _propose_from_dims(m3d_path, card)
-        if prop is not None and prop.blank_length_mm:
-            sec = cdw_dims.parse_section(mat0)
-            result["status"] = "⚠ проверить длину"
-            result["new_sortament"] = mat0
-            result["zagotovka_full"] = mat0
-            result["stock_size"] = f"{sec.kind} {'х'.join(f'{v:g}' for v in sec.sizes)}, L={prop.blank_length_mm:g}"
-            result["part_length_mm"] = prop.part_length_mm
-            result["stock_mass_kg"] = _fmt_mass_ru(round(prop.blank_mass_kg, 2))
-            result["error"] = f"Длина предложена по модели ({prop.confidence} уверенность): проверьте"
-            result["source"] = "M3D+размеры"
+
+        stock = None
+        if base is not None:
+            stock = m3d_stock.with_material(base, info.material, info.density)
+        if stock is None:
+            stock = m3d_stock.read_stock(m3d_path, info.material, info.mass_kg, info.density)
+        if (stock is not None and stock.kind == "lin" and info.mass_kg
+                and stock.blank_mass_kg and stock.blank_mass_kg < 0.3 * info.mass_kg):
+            trace.step("габарит", f"{stock.size_text}: заготовка легче детали, отброшено")
+            stock = None
+        if stock is not None:
+            trace.step("габарит", f"{stock.size_text} ({stock.method}); масса заготовки {stock.blank_mass_kg}",
+                       alts=str(stock.alts))
+            _fill_from_stock(result, card, stock, info)
+            result["_stock"] = stock
             return result
 
+        mat_show = re.sub(r"\s*;\s*", "/ ", card["material"])
+        result["new_sortament"] = mat_show
+        result["zagotovka_full"] = mat_show
+        result["drawing_sortament"] = ""
         result["status"] = "⚠ нет длины"
-        result["new_sortament"] = mat0
         result["error"] = "Размер заготовки по модели однозначно не определён"
         result["source"] = "M3D"
 
@@ -922,8 +961,85 @@ def _source_kind(path: str) -> str:
 
 
 def process_one_file(path: str, use_ai: bool = False) -> dict:
-    """Единая точка входа: .cdw читаем структурно, .m3d — свойства без
-    геометрии, остальное — через PDF."""
+    """Единая точка входа: .cdw читаем структурно, .m3d — по содержимому модели,
+    остальное — через PDF."""
+    return _process_file(path, use_ai)[0]
+
+
+def _find_cdw_beside(m3d_path: str, drawing_no: str):
+    """Чертёж .cdw с тем же обозначением в папке модели (точное, затем без -NN)."""
+    folder = os.path.dirname(os.path.abspath(m3d_path))
+    try:
+        names = [n for n in os.listdir(folder) if n.lower().endswith(".cdw")]
+    except OSError:
+        return None
+    base = re.sub(r"-\d+$", "", drawing_no or "")
+    for key in (drawing_no, base):
+        if not key:
+            continue
+        for n in sorted(names):
+            if n.startswith(key + " ") or os.path.splitext(n)[0] == key:
+                return os.path.join(folder, n)
+    return None
+
+
+def _cdw_fallback(m3d_path: str, row: dict) -> dict:
+    """Размер заготовки модель не дала: берём его из чертежа той же детали, если он
+    лежит рядом. Свойства модели (материал, масса) остаются как есть."""
+    if row.get("stock_size") or not str(row.get("status", "")).startswith("⚠"):
+        return row
+    cdw = _find_cdw_beside(m3d_path, row.get("drawing_no", ""))
+    if not cdw:
+        return row
+    try:
+        d = _process_file(cdw, False)[0]
+    except Exception as e:                                       # noqa: BLE001
+        logger.warn(f"Чертёж {cdw} не прочитан: {e}")
+        return row
+    if not d.get("stock_size"):
+        return row
+    row["stock_size"] = d["stock_size"]
+    row["stock_mass_kg"] = d.get("stock_mass_kg", "")
+    row["source"] = "M3D+чертёж"
+    row["status"] = "ОК" if d.get("status") == "ОК" else d.get("status", "ОК")
+    row["error"] = d.get("error", "") if d.get("status") != "ОК" else ""
+    return row
+
+
+def process_files(path: str, use_ai: bool = False) -> list:
+    """Строки таблицы для одного файла. Модель с исполнениями (-01, -02)
+    даёт строку на каждое исполнение, остальные файлы одну строку."""
+    if _source_kind(path) != "m3d":
+        return [process_one_file(path, use_ai)]
+    return [_cdw_fallback(path, r) for r in _process_m3d_rows(path, use_ai)]
+
+
+def _process_m3d_rows(path: str, use_ai: bool = False) -> list:
+    try:
+        from core.m3d_reader import embodiments
+        embs = embodiments(path)
+    except Exception as e:                                       # noqa: BLE001
+        logger.warn(f"Исполнения модели не прочитаны: {e}")
+        embs = []
+    if not embs:
+        return [process_one_file(path, use_ai)]
+    rows, base = [], None
+    for k, emb in enumerate(embs):
+        r, st = _process_file(path, use_ai, emb=emb, base=base)
+        if k == 0 and st is not None and st.kind == "lin":
+            base = st
+        rows.append(r)
+    return rows
+
+
+def _show_sortament(r: dict) -> bool:
+    """В колонке «Заготовка» стоит сортамент: у строки «ОК» и у любой строки,
+    прочитанной из модели (там сортамент известен всегда)."""
+    return r["status"] == "ОК" or (str(r.get("source", "")).startswith("M3D")
+                                   and bool(r.get("zagotovka_full")))
+
+
+def _process_file(path: str, use_ai: bool = False, emb: dict = None, base=None):
     kind = _source_kind(path)
     trace.begin(path)
     trace.step("начало", f"тип {kind}, ИИ {'вкл' if use_ai else 'выкл'}")
@@ -932,11 +1048,12 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
     elif kind == "m3d":
         # У .m3d нет ИИ-добора: там нет ни текста чертежа, ни картинки,
         # чтобы модели было на чём угадывать — только структурные свойства.
-        result = process_one_m3d(path)
+        result = process_one_m3d(path, emb=emb, base=base)
     else:
         result = process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
 
     raw_text = result.pop("_raw_text", "")
+    stock = result.pop("_stock", None)
     try:
         from core import agent
         dec = agent.decide(result)
@@ -959,7 +1076,7 @@ def process_one_file(path: str, use_ai: bool = False) -> dict:
         result=result,
         raw_text=raw_text,
     )
-    return result
+    return result, stock
 
 
 SUPPORTED_PATTERNS = ("*.cdw", "*.CDW", "*.pdf", "*.PDF", "*.m3d", "*.M3D", "*.a3d", "*.A3D")
@@ -1116,7 +1233,7 @@ def export_to_excel(results: list, save_path: str) -> None:
         else:
             fill = err_fill
 
-        sortament = r.get("new_sortament", "") if r["status"] == "ОК" else r.get("error", "")
+        sortament = r.get("new_sortament", "") if _show_sortament(r) else r.get("error", "")
 
         values = {
             "A": i,
@@ -1550,7 +1667,7 @@ class BatchToolScreen(ctk.CTkFrame):
                            {"text": f"Обработка {i + 1}/{total}: {os.path.basename(path)}"})
                 thread_bridge.post(self.progress.set, i / total)
                 try:
-                    self._results.append(process_one_file(path, use_ai=use_ai))
+                    self._results.extend(process_files(path, use_ai=use_ai))
                 except Exception as e:                          # noqa: BLE001
                     # Один сбойный файл не должен подвешивать всю обработку:
                     # строка с ошибкой, дальше идём по списку.
@@ -1640,7 +1757,7 @@ class BatchToolScreen(ctk.CTkFrame):
             str(idx + 1),
             r.get("drawing_no", ""),
             r.get("part_name", ""),
-            r.get("zagotovka_full", "") if r["status"] == "ОК" else r.get("error", ""),
+            r.get("zagotovka_full", "") if _show_sortament(r) else r.get("error", ""),
             r.get("new_sortament", ""),
             r.get("drawing_sortament", "") or r.get("material", ""),
             r.get("stock_size", ""),
