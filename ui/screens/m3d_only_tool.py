@@ -2,16 +2,12 @@
 """
 ui/screens/m3d_only_tool.py — вкладка «М3D инструмент».
 
-Отдельная вкладка ТОЛЬКО для .m3d/.a3d — без STEP, без КОМПАСа.
-Нужна, чтобы посмотреть, что вообще можно вытащить из файла .m3d:
-полный протокол (как в «3D инструменте») плюс СЫРОЙ дамп всех свойств,
-которые реально лежат в XML детали (core.m3d_reader.M3DInfo.all_props),
-включая то, что ещё не разобрано по именованным полям — чтобы было видно,
-есть ли там что-то полезное, что мы пока не используем.
-
-Геометрии (габаритов) здесь не будет — в .m3d она хранится в закрытом
-бинарном формате C3D и физически не читается без КОМПАСа/экспорта в STEP.
-Это не баг этой вкладки, а свойство формата.
+Только .m3d/.a3d, без STEP и без КОМПАС. Показывает:
+  • свойства из файла (обозначение, материал, масса, литера и т.д.) и сырой дамп;
+  • картинку детали (готовый 3D-вид, который КОМПАС кладёт в сам файл);
+  • блок «Как в таблице»: те же строки и значения, что программа собирает в
+    пакетной обработке (заготовка, размер, массы, источник, замечание);
+  • кнопку «Проверить через ИИ» для строк, где размер правилами не определился.
 """
 
 from __future__ import annotations
@@ -23,7 +19,7 @@ from ui import thread_bridge
 from tkinter import filedialog, messagebox
 
 from core.m3d_reader import read_m3d, M3DInfo
-from core import logger
+from core import logger, m3d_preview
 
 
 def _dump_value(value, indent: int = 0) -> list[str]:
@@ -43,11 +39,25 @@ def _dump_value(value, indent: int = 0) -> list[str]:
     return lines
 
 
+def format_rows(rows: list) -> str:
+    out = []
+    for r in rows:
+        out.append(
+            f"{r.get('drawing_no', '')}  {r.get('part_name', '')}\n"
+            f"  Заготовка: {r.get('zagotovka_full') or r.get('new_sortament') or '—'}\n"
+            f"  Размер: {r.get('stock_size') or '—'}    "
+            f"Масса заг.: {r.get('stock_mass_kg') or '—'} кг    "
+            f"Масса чист.: {r.get('clean_mass_kg') or '—'} кг\n"
+            f"  Источник: {r.get('source') or '—'}"
+            + (f"    Замечание: {r['error']}" if r.get("error") else ""))
+    return "\n\n".join(out) if out else "Нет данных"
+
+
 class M3DOnlyToolScreen(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
         self.m3d_path: str | None = None
         self.info: M3DInfo | None = None
@@ -65,11 +75,11 @@ class M3DOnlyToolScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             top,
-            text="Только .m3d/.a3d — без STEP, без КОМПАСа. Показывает всё, что "
-                 "реально лежит в файле (материал, масса, литера, автор и т.д.) "
-                 "— включая сырые свойства, которые ещё нигде не используются. "
-                 "Габаритов и типа заготовки здесь не будет: геометрия в .m3d "
-                 "закрыта (формат C3D) — для неё нужен экспорт в STEP.",
+            text="Только .m3d/.a3d, без STEP и без КОМПАСа. Показывает свойства "
+                 "из файла, картинку детали и те же значения, которые попадут "
+                 "в таблицу пакетной обработки (заготовка, размер, массы). "
+                 "Размер заготовки читается из содержимого модели; если "
+                 "правила его не нашли, можно проверить через ИИ.",
             text_color=("gray50", "#777777"), font=ctk.CTkFont(size=11),
             anchor="w", justify="left", wraplength=900,
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 8))
@@ -84,8 +94,12 @@ class M3DOnlyToolScreen(ctk.CTkFrame):
             command=self.on_pick
         ).grid(row=2, column=2, padx=16, pady=(0, 12))
 
-        data = ctk.CTkFrame(self, corner_radius=18)
-        data.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        mid = ctk.CTkFrame(self, fg_color="transparent")
+        mid.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        mid.grid_columnconfigure(0, weight=1)
+
+        data = ctk.CTkFrame(mid, corner_radius=18)
+        data.grid(row=0, column=0, sticky="nsew")
         data.grid_columnconfigure(1, weight=1)
         data.grid_columnconfigure(3, weight=1)
 
@@ -118,9 +132,39 @@ class M3DOnlyToolScreen(ctk.CTkFrame):
             lbl.grid(row=r + 1, column=col0 + 1, sticky="ew", pady=2, padx=(0, 16))
             setattr(self, attr, lbl)
 
+        prev = ctk.CTkFrame(mid, corner_radius=18, width=300)
+        prev.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        prev.grid_propagate(False)
+        ctk.CTkLabel(prev, text="Деталь", text_color=("gray40", "#A7A7A7"),
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=16, pady=(8, 0))
+        self.lbl_preview = ctk.CTkLabel(prev, text="нет картинки", text_color=("gray50", "#777777"))
+        self.lbl_preview.pack(expand=True, fill="both", padx=8, pady=8)
+        self._preview_img = None
+
+        tbl = ctk.CTkFrame(self, corner_radius=18)
+        tbl.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 6))
+        tbl.grid_columnconfigure(0, weight=1)
+        th = ctk.CTkFrame(tbl, fg_color="transparent")
+        th.grid(row=0, column=0, sticky="ew", padx=16, pady=(8, 4))
+        ctk.CTkLabel(th, text="Как в таблице", text_color=("gray40", "#A7A7A7"),
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        self.btn_xlsx = ctk.CTkButton(
+            th, text="Сохранить в Excel", height=28, corner_radius=10, width=150,
+            state="disabled", command=self.on_export)
+        self.btn_xlsx.pack(side="right")
+        self.btn_ai = ctk.CTkButton(
+            th, text="Проверить через ИИ", height=28, corner_radius=10, width=160,
+            fg_color=("gray88", "gray25"), hover_color=("gray80", "gray30"),
+            text_color=("gray10", "gray90"), state="disabled", command=self.on_ai)
+        self.btn_ai.pack(side="right", padx=(0, 8))
+        self.txt_tbl = ctk.CTkTextbox(tbl, height=120, corner_radius=14,
+                                      font=ctk.CTkFont(family="Courier", size=12), wrap="none")
+        self.txt_tbl.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 12))
+        self._rows: list = []
+
         # ═══ Результат / Сырой дамп ═══
         out = ctk.CTkFrame(self, corner_radius=18)
-        out.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 10))
+        out.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 10))
         out.grid_columnconfigure(0, weight=1)
         out.grid_columnconfigure(1, weight=1)
         out.grid_rowconfigure(1, weight=1)
@@ -168,7 +212,13 @@ class M3DOnlyToolScreen(ctk.CTkFrame):
         self.txt_prot.delete("1.0", "end")
         self.txt_prot.insert("1.0", "Читаю файл…")
         self.txt_raw.delete("1.0", "end")
+        self._rows = []
+        self.btn_xlsx.configure(state="disabled")
+        self.btn_ai.configure(state="disabled")
+        self._set_table("Считаю…")
+        self._set_preview(None)
         threading.Thread(target=self._read_worker, args=(path,), daemon=True).start()
+        threading.Thread(target=self._table_worker, args=(path, False), daemon=True).start()
 
     def _clear_fields(self):
         for attr in ("lbl_dno", "lbl_pname", "lbl_material", "lbl_mark", "lbl_density",
@@ -238,3 +288,76 @@ class M3DOnlyToolScreen(ctk.CTkFrame):
         self.clipboard_clear()
         self.clipboard_append(text)
         messagebox.showinfo("Скопировано", "Протокол и сырые свойства скопированы в буфер обмена.")
+
+
+    # ── Картинка и «как в таблице» ───────────────────────────
+
+    def _set_preview(self, im):
+        if im is None:
+            self._preview_img = None
+            self.lbl_preview.configure(image=None, text="нет картинки")
+            return
+        w, h = im.size
+        k = min(1.0, 270.0 / w, 250.0 / h)
+        size = (max(1, int(w * k)), max(1, int(h * k)))
+        self._preview_img = ctk.CTkImage(light_image=im, dark_image=im, size=size)
+        self.lbl_preview.configure(image=self._preview_img, text="")
+
+    def _set_table(self, text: str):
+        self.txt_tbl.configure(state="normal")
+        self.txt_tbl.delete("1.0", "end")
+        self.txt_tbl.insert("1.0", text)
+        self.txt_tbl.configure(state="disabled")
+
+    @staticmethod
+    def _format_rows(rows: list) -> str:
+        return format_rows(rows)
+
+    def _table_worker(self, path: str, use_ai: bool):
+        im = None if use_ai else m3d_preview.read_preview(path)
+        try:
+            from ui.screens import batch_tool as bt
+            rows = bt.process_files(path, use_ai=use_ai)
+            err = ""
+        except Exception as e:                                # noqa: BLE001
+            rows, err = [], str(e)
+        thread_bridge.post(self._apply_table, path, rows, err, im, use_ai)
+
+    def _apply_table(self, path: str, rows: list, err: str, im, use_ai: bool):
+        if path != self.m3d_path:
+            return                                            # пользователь уже выбрал другой файл
+        if not use_ai:
+            self._set_preview(im)
+        self._rows = rows
+        self._set_table(self._format_rows(rows) if rows else f"Не удалось собрать: {err}")
+        self.btn_xlsx.configure(state="normal" if rows else "disabled")
+        missing = any(not r.get("stock_size") for r in rows)
+        if use_ai and missing:
+            self.txt_tbl.configure(state="normal")
+            self.txt_tbl.insert("end", "\n\nИИ не смог предложить размер, прошедший проверку по массе.")
+            self.txt_tbl.configure(state="disabled")
+        self.btn_ai.configure(state="normal" if (rows and missing and not use_ai) else "disabled")
+
+    def on_ai(self):
+        if not self.m3d_path:
+            return
+        self.btn_ai.configure(state="disabled")
+        self._set_table("Запрос к ИИ…")
+        threading.Thread(target=self._table_worker, args=(self.m3d_path, True),
+                         daemon=True).start()
+
+    def on_export(self):
+        if not self._rows:
+            return
+        from ui.screens import batch_tool as bt
+        path = filedialog.asksaveasfilename(
+            title="Сохранить результаты", defaultextension=".xlsx",
+            filetypes=[("Excel файл", "*.xlsx")],
+            initialfile=os.path.splitext(os.path.basename(self.m3d_path or "модель"))[0] + ".xlsx")
+        if not path:
+            return
+        try:
+            bt._export_client(self._rows, path)
+            messagebox.showinfo("Сохранено", f"Файл сохранён:\n{path}")
+        except Exception as e:                                # noqa: BLE001
+            messagebox.showerror("Ошибка экспорта", str(e))

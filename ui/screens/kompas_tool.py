@@ -46,6 +46,10 @@ class KompasToolScreen(ctk.CTkFrame):
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
+        from ui.screens.kompas_batch import KompasBatchPanel
+        self._batch_panel = KompasBatchPanel(self)
+        self._batch_panel.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
+
         self.status: ConnectionStatus | None = None
         self.step_path: str | None = None
         self._live_tracking_var = ctk.BooleanVar(value=False)
@@ -368,10 +372,23 @@ class KompasToolScreen(ctk.CTkFrame):
         status = connect() if is_available() else ConnectionStatus(
             False, error="Доступно только в Windows-сборке"
         )
+        # COM-объект принадлежит этому потоку: в главный поток его передавать нельзя,
+        # освобождение из чужого потока валит процесс без сообщения об ошибке.
+        status.app = None
+        if is_available():
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:                                 # noqa: BLE001
+                pass
         thread_bridge.post(self._apply_status, status)
 
     def _apply_status(self, status: ConnectionStatus):
         self.status = status
+        try:
+            self._batch_panel.set_status(status.connected, status.api, status.error)
+        except Exception:                                     # noqa: BLE001
+            pass
         if status.connected:
             self._dot.configure(fg_color="#4CAF50")
             self._status_label.configure(

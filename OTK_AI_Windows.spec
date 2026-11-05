@@ -14,7 +14,11 @@ if (project_dir / "build_info.txt").exists():
     datas.append((str(project_dir / "build_info.txt"), "."))
 
 binaries = []
-hiddenimports = []
+hiddenimports = [
+    # работа с КОМПАС идёт в отдельном процессе этого же exe (--kompas-worker)
+    "integrations.kompas.worker", "integrations.kompas.client", "integrations.kompas.batch",
+    "pythoncom", "pywintypes", "win32com", "win32com.client",
+]
 
 # CustomTkinter: темы, шрифты и ресурсы
 ctk_datas, ctk_binaries, ctk_imports = collect_all(

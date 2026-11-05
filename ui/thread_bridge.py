@@ -10,6 +10,7 @@ post(fn, *args, **kwargs); функция выполняется в главно
 
 from __future__ import annotations
 
+import gc
 import queue
 from typing import Any, Callable, Optional
 
@@ -18,11 +19,18 @@ from core import logger
 _q: "queue.Queue[tuple]" = queue.Queue()
 _root: Optional[Any] = None
 _POLL_MS = 60
+_GC_EVERY = 80          # опросов (около 5 секунд) между сборками мусора в главном потоке
+_ticks = 0
 
 
 def install(root) -> None:
+    """Сборщик мусора переводится в ручной режим и вызывается только из главного
+    потока. Иначе он может сработать в рабочем потоке (при пакетной обработке) и
+    уничтожить объект окна VTK или Tk не там, где можно: macOS на это закрывает
+    приложение («Must only be used from the main thread»)."""
     global _root
     _root = root
+    gc.disable()
     _poll()
 
 
@@ -41,6 +49,14 @@ def _poll() -> None:
                 logger.error(f"UI: ошибка обновления окна: {e}")
     except queue.Empty:
         pass
+    global _ticks
+    _ticks += 1
+    if _ticks >= _GC_EVERY:
+        _ticks = 0
+        try:
+            gc.collect()
+        except Exception as e:                                # noqa: BLE001
+            logger.error(f"UI: сборка мусора: {e}")
     if _root is not None:
         try:
             _root.after(_POLL_MS, _poll)

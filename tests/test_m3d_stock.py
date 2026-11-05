@@ -72,3 +72,25 @@ def test_cdw_fallback_takes_size_from_drawing(tmp_path, monkeypatch):
     out = bt._cdw_fallback(str(tmp_path / "201647.03.00.002 Палец.m3d"), row)
     assert out["stock_size"] == "L=94" and out["status"] == "ОК" and out["error"] == ""
     assert bt._find_cdw_beside(str(tmp_path / "x.m3d"), "201647.03.00.002-01").endswith("Палец.cdw")
+
+
+def test_beams_sections_and_mass():
+    kind, label, need = ms._linear_section("Двутавр 40Б1")
+    assert kind == "beam" and need == [400.0]
+    assert abs(ms._lin_mass(kind, "Двутавр 40Б1", need, 7350.0, 7.85) - 416.01) < 0.01
+    k2, _, n2 = ms._linear_section("Балка IPE 360 DIN 1025")
+    assert k2 == "beam" and n2 == [360.0]
+    assert abs(ms._lin_mass(k2, "Балка IPE 360 DIN 1025", n2, 3655.0, 7.85) - 208.7) < 0.1
+    # круглая труба по формуле, без таблицы
+    tk, _, tn = ms._linear_section("Труба 25х3,2")
+    assert abs(ms._lin_mass(tk, "Труба 25х3,2", tn, 1000.0, 7.85) - 1.72) < 0.01
+
+
+def test_export_keeps_size_for_kompas_cross_check_rows():
+    from core import client_format as cf
+    row = {"drawing_no": "1.2.3", "part_name": "A", "status": "⚠ проверить", "source": "КОМПАС",
+           "new_sortament": "Лист 5 ГОСТ 19903-2015", "zagotovka_full": "Лист 5 ГОСТ 19903-2015",
+           "stock_size": "HxL = 120x230", "stock_mass_kg": "1,08", "clean_mass_kg": "0,972",
+           "error": "Габарит КОМПАС расходится"}
+    out = cf.rows_for_client([row])[0]
+    assert "120x230" in str(out)

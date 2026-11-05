@@ -30,7 +30,8 @@ KG_PER_M_CHANNEL = {5: 4.84, 6.5: 5.90, 8: 7.05, 10: 8.59, 12: 10.4, 14: 12.3, 1
                     18: 16.3, 20: 18.4, 22: 21.0, 24: 24.0, 27: 27.7, 30: 31.8,
                     33: 36.5, 36: 41.9, 40: 48.3}
 KG_PER_M = {"труба 159x7": 26.27, "профиль 100x50x5": 10.483, "профиль 120x60x5": 12.84,
-            "труба 60x60x3": 5.19, "уголок 160x100x10": 19.83}
+            "труба 60x60x3": 5.19, "уголок 160x100x10": 19.83,
+            "двутавр 40б1": 56.6, "балка ipe 360": 57.1}
 
 
 @dataclass
@@ -147,6 +148,10 @@ def _linear_section(head: str):
         return "profile", head, n[:2]
     if w.startswith("швеллер"):
         return "channel", head, [n[0] * 10]
+    if w.startswith("двутавр"):
+        return "beam", head, [n[0] * 10]
+    if w.startswith("балка") and "ipe" in w:
+        return "beam", head, [n[0]]
     return None
 
 
@@ -199,9 +204,13 @@ def read_stock(path, material: str, mass_kg: Optional[float], density=None) -> O
             good.append((wgt, dims, L))
     if not good:
         L = _dominant_length(cands, kind, head, need, mass_kg)
+        method = "габарит модели"
+        if not L:
+            L = _frequent_length(path, kind, head, need, mass_kg, rho)
+            method = "размеры модели"
         if not L:
             return None
-        st = Stock("lin", l_mm=L, section=label, method="габарит модели")
+        st = Stock("lin", l_mm=L, section=label, method=method)
         st.blank_mass_kg = _lin_mass(kind, head, need, L, rho)
         return st
     good.sort(key=lambda g: (-g[0], g[1][0] * g[1][1] * g[1][2]))
@@ -210,6 +219,44 @@ def read_stock(path, material: str, mass_kg: Optional[float], density=None) -> O
     st = Stock("lin", l_mm=L, section=label, method="габарит модели", alts=[(a,) for a in alts])
     st.blank_mass_kg = _lin_mass(kind, head, need, L, rho)
     return st
+
+
+_POW2 = {128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0}
+
+
+def _frequent_length(path, kind: str, head: str, need: List[float], mass_kg, rho: float) -> Optional[float]:
+    """Габаритной записи тела нет (деталь собрана из эскизов), но длина проката
+    входит в координаты многих точек и поэтому встречается в файле намного чаще
+    остальных размеров. Берётся самое частое круглое значение длиннее сечения;
+    принимается, только если оно заметно впереди второго и масса детали сходится
+    с массой заготовки такой длины (0.6-1.02)."""
+    if kind in ("round", "square") or not mass_kg:
+        return None
+    try:
+        chunks = cdw_geometry.unpack_contents(path)
+    except Exception:                                        # noqa: BLE001
+        return None
+    cnt: collections.Counter = collections.Counter()
+    for chunk in chunks:
+        for sh in range(8):
+            n = (len(chunk) - sh) // 8
+            if n < 1:
+                continue
+            for x in struct.unpack_from("<%dd" % n, chunk, sh):
+                if x == x and 15.0 <= x <= 20000.0 and abs(x - round(x, 1)) < 1e-6:
+                    cnt[round(x, 1)] += 1
+    floor = 1.5 * max(need)
+    cand = [(c, v) for v, c in cnt.items() if v >= floor and v not in _POW2]
+    cand.sort(reverse=True)
+    if not cand or cand[0][0] < 20:
+        return None
+    if len(cand) > 1 and cand[0][0] < 1.3 * cand[1][0]:
+        return None
+    L = cand[0][1]
+    bm = _lin_mass(kind, head, need, L, rho)
+    if not bm or not (0.6 <= mass_kg / bm <= 1.02):
+        return None
+    return L
 
 
 def _dominant_length(cands, kind: str, head: str, need: List[float], mass_kg) -> Optional[float]:
@@ -253,10 +300,17 @@ def with_material(stock: "Stock", material: str, density=None) -> Optional["Stoc
 
 def _lin_mass(kind: str, head: str, need: List[float], L: float, rho: float) -> Optional[float]:
     per_m = KG_PER_M.get(_norm(head))
+    if per_m is None and kind == "beam":                  # «Балка IPE 360 DIN 1025»
+        nh = _norm(head)
+        per_m = next((v for k, v in KG_PER_M.items() if nh.startswith(k)), None)
     if kind == "channel":
         per_m = KG_PER_M_CHANNEL.get(need[0] / 10)
         if per_m is None and need[0] / 10 == int(need[0] / 10):
             per_m = KG_PER_M_CHANNEL.get(int(need[0] / 10))
+    if not per_m and kind == "tube":
+        n = _nums(head)
+        if len(n) == 2 and n[1] * 2 < n[0]:               # труба D x s
+            per_m = math.pi * n[1] * (n[0] - n[1]) * rho / 1000.0
     if per_m:
         return round(per_m * L / 1000.0, 6)
     if kind == "round":
@@ -266,6 +320,44 @@ def _lin_mass(kind: str, head: str, need: List[float], L: float, rho: float) -> 
     else:
         return None
     return round(area * L * rho * 1e-6, 6)
+
+
+def stock_from_body(dims, material: str, mass_kg: Optional[float], density=None) -> Optional[Stock]:
+    """Заготовка по габариту тела, который отдал сам КОМПАС (три размера, мм).
+    То же правило, что и по записям файла, но без выбора среди кандидатов.
+    None, если размер не получается (гнутая деталь без размера, не тот сортамент)."""
+    try:
+        ds = [float(d) for d in dims]
+    except (TypeError, ValueError):
+        return None
+    if len(ds) != 3 or min(ds) <= 0:
+        return None
+    head = _head(material)
+    w = head.lower()
+    rho = _rho(density)
+    if w.startswith(("лист", "жесть")):
+        t = _sheet_thickness(head)
+        if not t:
+            return None
+        idx = [i for i, d in enumerate(ds) if abs(d - t) < 0.011 + 0.001 * t]
+        if len(idx) != 1:
+            return None                       # гнутая или нестандартная толщина: не угадываем
+        h, l = sorted(d for i, d in enumerate(ds) if i != idx[0])
+        if mass_kg and h * l < 0.95 * (mass_kg / (t * rho * 1e-6)):
+            return None
+        st = Stock("sheet", h_mm=h, l_mm=l, thickness_mm=t, method="габарит КОМПАС")
+        st.blank_mass_kg = round(h * l * t * rho * 1e-6, 6)
+        return st
+    sec = _linear_section(head)
+    if sec is None:
+        return None
+    kind, label, need = sec
+    L = _length_from(kind, need, ds)
+    if not L:
+        return None
+    st = Stock("lin", l_mm=L, section=label, method="габарит КОМПАС")
+    st.blank_mass_kg = _lin_mass(kind, head, need, L, rho)
+    return st
 
 
 def _sheet_by_edges(boxes, t: float, enough) -> Optional[tuple]:

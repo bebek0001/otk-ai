@@ -3,6 +3,24 @@ import os
 import sys
 import json
 
+# Служебный режим: отдельный процесс для работы с КОМПАС (см. integrations/kompas/worker.py).
+# Запускается раньше всего остального, чтобы не тянуть интерфейс.
+if "--kompas-worker" in sys.argv:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from integrations.kompas.worker import main as _kompas_worker_main
+    _kompas_worker_main()
+    sys.exit(0)
+
+# Диагностика на компьютере с КОМПАС: OTK_AI --kompas-selftest "путь\к\модели.m3d"
+# Отчёт пишется в файл kompas_selftest.txt рядом с запуском.
+if "--kompas-selftest" in sys.argv:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from integrations.kompas.batch import selftest as _kompas_selftest
+    _i = sys.argv.index("--kompas-selftest")
+    _report = os.path.join(os.getcwd(), "kompas_selftest.txt")
+    print(_kompas_selftest(sys.argv[_i + 1] if len(sys.argv) > _i + 1 else "", _report))
+    sys.exit(0)
+
 from core.paths import USER_DATA_DIR, SETTINGS_PATH
 
 import customtkinter as ctk
