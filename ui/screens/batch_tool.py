@@ -773,7 +773,7 @@ def _fill_from_stock(result: dict, card: dict, stock, info) -> None:
                            f"({_fmt_mass_ru(round(bm, 3))})")
 
 
-def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None) -> dict:
+def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None, kmass=None) -> dict:
     """Модель КОМПАС (.m3d) читается по своему содержимому: свойства (обозначение,
     наименование, сортамент, марка, масса) и габарит тела (core.m3d_stock).
     emb: одно из исполнений модели (-01, -02), base: заготовка основного
@@ -798,6 +798,13 @@ def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None) -> di
             info.material = emb.get("material") or info.material
             info.mass_kg = emb.get("mass_kg") or info.mass_kg
             info.density = emb.get("density") or info.density
+        mass_note = ""
+        if kmass and kmass > 0:
+            # масса исполнения, пересчитанная самим КОМПАС при открытии модели, надёжнее сохранённой в файле
+            if info.mass_kg and abs(kmass - info.mass_kg) > 0.01 * kmass:
+                mass_note = (f"Масса по КОМПАС {_fmt_mass_ru(round(kmass, 3))} "
+                             f"(в файле сохранена {_fmt_mass_ru(info.mass_kg)})")
+            info.mass_kg = round(kmass, 4)
 
         card = _m3d_card(info)
         result["_raw_text"]     = info.protocol
@@ -844,18 +851,25 @@ def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None) -> di
             return result
 
         stock = None
-        if base is not None:
-            stock = m3d_stock.with_material(base, info.material, info.density)
-        cross = None
-        if stock is None and body:
+        est_note = ""
+        if body:
             stock = m3d_stock.stock_from_body(body, info.material, info.mass_kg, info.density)
-            if stock is not None:
-                # Сверка с чтением по файлу: пока габарит КОМПАС не откалиброван на
-                # реальной машине, любое расхождение должно быть видно в таблице.
+            if stock is None:
+                # габарит не равен заготовке (гнутая или составная деталь): сначала чтение
+                # по файлу, если оно сходится по массе, иначе оценка по габариту и массе
                 try:
-                    cross = m3d_stock.read_stock(m3d_path, info.material, info.mass_kg, info.density)
+                    fst = m3d_stock.read_stock(m3d_path, info.material, info.mass_kg, info.density)
                 except Exception:                                # noqa: BLE001
-                    cross = None
+                    fst = None
+                if m3d_stock.plausible(fst, info.mass_kg):
+                    stock = fst
+                else:
+                    stock = m3d_stock.estimate_from_mass(body, info.material, info.mass_kg, info.density)
+                    if stock is not None:
+                        est_note = ("Гнутая или составная деталь: размер заготовки оценён по габариту "
+                                    "КОМПАС и массе, проверьте")
+        if stock is None and base is not None:
+            stock = m3d_stock.with_material(base, info.material, info.density)
         if stock is None:
             stock = m3d_stock.read_stock(m3d_path, info.material, info.mass_kg, info.density)
         if (stock is not None and stock.kind == "lin" and info.mass_kg
@@ -866,10 +880,21 @@ def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None) -> di
             trace.step("габарит", f"{stock.size_text} ({stock.method}); масса заготовки {stock.blank_mass_kg}",
                        alts=str(stock.alts))
             _fill_from_stock(result, card, stock, info)
-            if cross is not None and cross.size_text != stock.size_text:
+            mm, bm = info.mass_kg, stock.blank_mass_kg
+            if est_note:
                 result["status"] = "⚠ проверить"
-                result["error"] = (f"Габарит КОМПАС ({stock.size_text}) расходится с чтением "
-                                   f"файла ({cross.size_text}): проверьте")
+                result["error"] = est_note
+            elif result["status"] == "ОК" and mm and bm:
+                if mm > bm * 1.03:
+                    result["status"] = "⚠ проверить"
+                    result["error"] = (f"Масса детали ({_fmt_mass_ru(mm)}) больше массы заготовки "
+                                       f"({_fmt_mass_ru(round(bm, 3))}): проверьте массу или сортамент")
+                elif stock.kind == "sheet" and bm > 2.5 * mm:
+                    result["status"] = "⚠ проверить"
+                    result["error"] = (f"Заготовка тяжелее детали в {bm / mm:.1f} раза: проверьте габарит "
+                                       f"(в модели возможны лишние тела)")
+            if mass_note:
+                result["error"] = (result["error"] + "; " if result.get("error") else "") + mass_note
             result["_stock"] = stock
             return result
 
@@ -1020,12 +1045,12 @@ def _cdw_fallback(m3d_path: str, row: dict) -> dict:
     return row
 
 
-def process_files(path: str, use_ai: bool = False, body=None) -> list:
+def process_files(path: str, use_ai: bool = False, body=None, bodies=None) -> list:
     """Строки таблицы для одного файла. Модель с исполнениями (-01, -02)
     даёт строку на каждое исполнение, остальные файлы одну строку."""
     if _source_kind(path) != "m3d":
         return [process_one_file(path, use_ai)]
-    rows = [_cdw_fallback(path, r) for r in _process_m3d_rows(path, use_ai, body)]
+    rows = [_cdw_fallback(path, r) for r in _process_m3d_rows(path, use_ai, body, bodies)]
     if use_ai:
         rows = [_ai_review(path, r) for r in rows]
     return rows
@@ -1066,18 +1091,27 @@ def _ai_review(path: str, row: dict) -> dict:
     return row
 
 
-def _process_m3d_rows(path: str, use_ai: bool = False, body=None) -> list:
+def _process_m3d_rows(path: str, use_ai: bool = False, body=None, bodies=None) -> list:
     try:
         from core.m3d_reader import embodiments
         embs = embodiments(path)
     except Exception as e:                                       # noqa: BLE001
         logger.warn(f"Исполнения модели не прочитаны: {e}")
         embs = []
+    one_mass = None
+    if bodies and len(bodies) == 1 and bodies[0].get("mass_g"):
+        one_mass = bodies[0]["mass_g"] / 1000.0
     if not embs:
-        return [_process_file(path, use_ai, body=body)[0]]
+        return [_process_file(path, use_ai, body=body, kmass=one_mass)[0]]
+    from core import m3d_stock
+    # у каждого исполнения свой габарит: КОМПАС переключает исполнения и отдаёт размер каждого
+    picks = m3d_stock.match_kompas(embs, bodies)
+    if len(embs) == 1 and body and 0 not in picks:
+        picks[0] = {"dims": tuple(body), "mass_kg": one_mass}
     rows, base = [], None
     for k, emb in enumerate(embs):
-        r, st = _process_file(path, use_ai, emb=emb, base=base, body=body)
+        pk = picks.get(k) or {}
+        r, st = _process_file(path, use_ai, emb=emb, base=base, body=pk.get("dims"), kmass=pk.get("mass_kg"))
         if k == 0 and st is not None and st.kind == "lin":
             base = st
         rows.append(r)
@@ -1091,7 +1125,7 @@ def _show_sortament(r: dict) -> bool:
                                    and bool(r.get("zagotovka_full")))
 
 
-def _process_file(path: str, use_ai: bool = False, emb: dict = None, base=None, body=None):
+def _process_file(path: str, use_ai: bool = False, emb: dict = None, base=None, body=None, kmass=None):
     kind = _source_kind(path)
     trace.begin(path)
     trace.step("начало", f"тип {kind}, ИИ {'вкл' if use_ai else 'выкл'}")
@@ -1100,7 +1134,7 @@ def _process_file(path: str, use_ai: bool = False, emb: dict = None, base=None, 
     elif kind == "m3d":
         # У .m3d нет ИИ-добора: там нет ни текста чертежа, ни картинки,
         # чтобы модели было на чём угадывать — только структурные свойства.
-        result = process_one_m3d(path, emb=emb, base=base, body=body)
+        result = process_one_m3d(path, emb=emb, base=base, body=body, kmass=kmass)
     else:
         result = process_one_pdf_with_ai(path) if use_ai else process_one_pdf(path)
 

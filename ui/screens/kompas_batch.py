@@ -152,6 +152,7 @@ class KompasBatchPanel(ctk.CTkFrame):
             kompas_ok = False
             try:
                 info = kc.detect()
+                kb._write_log_file(f"detect: {info}")
                 kompas_ok = bool(info.get("installed"))
                 if not kompas_ok:
                     thread_bridge.post(
@@ -163,18 +164,23 @@ class KompasBatchPanel(ctk.CTkFrame):
                         self._state.configure,
                         {"text": f"Обработано {i} из {total}"})
                     thread_bridge.post(self._progress.set, i / total)
-                    body = None
+                    body, bodies = None, []
                     if kompas_ok:
                         resp = kc.body(path)
                         dims = resp.get("dims")
-                        body = tuple(dims) if dims else None
-                        if not body and not kerr:
-                            kerr.append(resp.get("error") or "ответ без габарита")
+                        exact = bool(resp.get("exact"))
+                        body = tuple(dims) if dims and exact else None
+                        bodies = [{"marking": e.get("marking", ""), "dims": tuple(e["dims"]), "mass_g": e.get("mass_g")}
+                                  for e in (resp.get("embs") or []) if e.get("dims") and e.get("exact")]
+                        if not body and not bodies and not kerr:
+                            kerr.append(resp.get("error") or (
+                                "габарит без STEP включает вспомогательную геометрию, не используется"
+                                if dims else "ответ без габарита"))
                         kb.log_result(path, kb.BodyResult(
-                            dims=body, error=resp.get("error", ""),
-                            attempts=resp.get("attempts") or []))
+                            dims=tuple(dims) if dims else None, exact=exact, error=resp.get("error", ""),
+                            attempts=resp.get("attempts") or [], embs=resp.get("embs") or []))
                     try:
-                        rows = bt.process_files(path, use_ai=False, body=body)
+                        rows = bt.process_files(path, use_ai=False, body=body, bodies=bodies)
                     except Exception as e:                     # noqa: BLE001
                         logger.error(f"Пакет КОМПАС: {path}: {e}")
                         r = bt._blank_result(path)

@@ -32,7 +32,18 @@ KG_PER_M_CHANNEL = {5: 4.84, 6.5: 5.90, 8: 7.05, 10: 8.59, 12: 10.4, 14: 12.3, 1
 KG_PER_M = {"труба 159x7": 26.27, "профиль 100x50x5": 10.483, "профиль 120x60x5": 12.84,
             "труба 60x60x3": 5.19, "уголок 160x100x10": 19.83,
             "двутавр 40б1": 56.6, "балка ipe 360": 57.1,
-            "уголок 35x35x4": 2.10, "труба 30x30x3": 2.36}
+            "труба 30x30x3": 2.36,
+            # равнополочные уголки ГОСТ 8509-93, кг/м
+            "уголок 20x20x3": 0.89, "уголок 25x25x3": 1.12, "уголок 25x25x4": 1.46,
+            "уголок 30x30x3": 1.36, "уголок 30x30x4": 1.78, "уголок 32x32x4": 1.91,
+            "уголок 35x35x4": 2.10, "уголок 40x40x4": 2.42, "уголок 40x40x5": 2.97,
+            "уголок 45x45x4": 2.73, "уголок 45x45x5": 3.37, "уголок 50x50x4": 3.05,
+            "уголок 50x50x5": 3.77, "уголок 63x63x5": 4.81, "уголок 63x63x6": 5.72,
+            "уголок 75x75x5": 5.80, "уголок 75x75x6": 6.89, "уголок 90x90x6": 8.33,
+            "уголок 100x100x8": 12.2}
+# водогазопроводные трубы ГОСТ 3262-75: условный проход DN -> наружный диаметр, мм
+DN_OD = {10: 17.0, 15: 21.3, 20: 26.8, 25: 33.5, 32: 42.3, 40: 48.0, 50: 60.0,
+         65: 75.5, 80: 88.5, 100: 114.0, 125: 140.0, 150: 165.0}
 
 
 @dataclass
@@ -299,7 +310,8 @@ def with_material(stock: "Stock", material: str, density=None) -> Optional["Stoc
     return st
 
 
-def _lin_mass(kind: str, head: str, need: List[float], L: float, rho: float) -> Optional[float]:
+def _per_m(kind: str, head: str, need: List[float], rho: float, od: Optional[float] = None) -> Optional[float]:
+    """Масса погонного метра сортамента, кг/м (None, если неизвестна)."""
     per_m = KG_PER_M.get(_norm(head))
     if per_m is None and kind == "beam":                  # «Балка IPE 360 DIN 1025»
         nh = _norm(head)
@@ -311,16 +323,40 @@ def _lin_mass(kind: str, head: str, need: List[float], L: float, rho: float) -> 
     if not per_m and kind == "tube":
         n = _nums(head)
         if len(n) == 2 and n[1] * 2 < n[0]:               # труба D x s
-            per_m = math.pi * n[1] * (n[0] - n[1]) * rho / 1000.0
+            d = od or n[0]
+            per_m = math.pi * n[1] * (d - n[1]) * rho / 1000.0
     if per_m:
-        return round(per_m * L / 1000.0, 6)
+        return per_m
     if kind == "round":
-        area = math.pi * need[0] ** 2 / 4
-    elif kind == "square":
-        area = need[0] ** 2
-    else:
-        return None
-    return round(area * L * rho * 1e-6, 6)
+        return math.pi * need[0] ** 2 / 4 * rho * 1e-3
+    if kind == "square":
+        return need[0] ** 2 * rho * 1e-3
+    return None
+
+
+def _lin_mass(kind: str, head: str, need: List[float], L: float, rho: float,
+              od: Optional[float] = None) -> Optional[float]:
+    per_m = _per_m(kind, head, need, rho, od)
+    return round(per_m * L / 1000.0, 6) if per_m else None
+
+
+def _up(x: float, tol: float = 0.06) -> float:
+    """Размер заготовки вверх до целого мм (с допуском на вычислительный шум)."""
+    return float(math.ceil(x - tol))
+
+
+def _up5(x: float) -> float:
+    return float(math.ceil(x / 5.0 - 1e-9) * 5)
+
+
+def _tube_od(n: List[float], ds) -> float:
+    """Наружный диаметр круглой трубы. «Труба 25х3,2 ГОСТ 3262» это условный проход DN25
+    (наружный диаметр 33,5): выбирается тот диаметр, который виден в габарите модели."""
+    d0 = n[0]
+    dn = DN_OD.get(int(d0)) if float(d0).is_integer() else None
+    if dn and any(_near(d, dn) for d in ds) and not any(_near(d, d0) for d in ds):
+        return dn
+    return d0
 
 
 def stock_from_body(dims, material: str, mass_kg: Optional[float], density=None) -> Optional[Stock]:
@@ -340,10 +376,13 @@ def stock_from_body(dims, material: str, mass_kg: Optional[float], density=None)
         t = _sheet_thickness(head)
         if not t:
             return None
-        idx = [i for i, d in enumerate(ds) if abs(d - t) < 0.011 + 0.001 * t]
+        # толщина листа или чуть больше (бобышка, фаска, допуск проката): лист плоский
+        idx = [i for i, d in enumerate(ds)
+               if abs(d - t) < 0.011 + 0.001 * t or t < d <= 1.1 * t + 1.0]
         if len(idx) != 1:
-            return None                       # гнутая или нестандартная толщина: не угадываем
+            return None                       # гнутая или нестандартная толщина: оценка по массе
         h, l = sorted(d for i, d in enumerate(ds) if i != idx[0])
+        h, l = _up(h), _up(l)
         if mass_kg and h * l < 0.95 * (mass_kg / (t * rho * 1e-6)):
             return None
         st = Stock("sheet", h_mm=h, l_mm=l, thickness_mm=t, method="габарит КОМПАС")
@@ -353,12 +392,67 @@ def stock_from_body(dims, material: str, mass_kg: Optional[float], density=None)
     if sec is None:
         return None
     kind, label, need = sec
+    od = None
+    if kind == "tube" and len(_nums(head)) == 2:
+        od = _tube_od(_nums(head), ds)
+        need = [od, od]
     L = _length_from(kind, need, ds)
     if not L:
         return None
+    L = _up(L)
     st = Stock("lin", l_mm=L, section=label, method="габарит КОМПАС")
-    st.blank_mass_kg = _lin_mass(kind, head, need, L, rho)
+    st.blank_mass_kg = _lin_mass(kind, head, need, L, rho, od)
     return st
+
+
+def estimate_from_mass(dims, material: str, mass_kg: Optional[float], density=None) -> Optional[Stock]:
+    """Оценка заготовки для гнутой или составной детали, у которой габарит не равен
+    заготовке: лист (развёртка) или пруток/труба/профиль (длина по массе). Длина или
+    большая сторона берётся из габарита КОМПАС, второй размер или длина считаются
+    по массе детали. Всегда предварительная: строка помечается «проверить»."""
+    try:
+        ds = [float(d) for d in dims]
+    except (TypeError, ValueError):
+        return None
+    if len(ds) != 3 or min(ds) <= 0 or not mass_kg or mass_kg <= 0:
+        return None
+    head = _head(material)
+    w = head.lower()
+    rho = _rho(density)
+    if w.startswith(("лист", "жесть")):
+        t = _sheet_thickness(head)
+        if not t:
+            return None
+        L = _up(max(ds))
+        width = _up5(mass_kg / (t * rho * 1e-6) / L)
+        h, l = sorted((width, L))
+        st = Stock("sheet", h_mm=h, l_mm=l, thickness_mm=t, method="оценка по габариту КОМПАС и массе")
+        st.blank_mass_kg = round(h * l * t * rho * 1e-6, 6)
+        return st
+    sec = _linear_section(head)
+    if sec is None:
+        return None
+    kind, label, need = sec
+    od = None
+    if kind == "tube" and len(_nums(head)) == 2:
+        od = _tube_od(_nums(head), ds)
+        need = [od, od]
+    per_m = _per_m(kind, head, need, rho, od)
+    if not per_m:
+        return None
+    L = _up5(mass_kg / per_m * 1000.0)
+    st = Stock("lin", l_mm=L, section=label, method="оценка по габариту КОМПАС и массе")
+    st.blank_mass_kg = round(per_m * L / 1000.0, 6)
+    return st
+
+
+def plausible(stock: Optional[Stock], mass_kg: Optional[float]) -> bool:
+    """Заготовка не легче детали и не тяжелее её в разы: так выглядит нормальная заготовка."""
+    if stock is None:
+        return False
+    if not mass_kg or not stock.blank_mass_kg:
+        return True
+    return 0.98 <= stock.blank_mass_kg / mass_kg <= 1.35
 
 
 def _sheet_by_edges(boxes, t: float, enough) -> Optional[tuple]:
@@ -426,3 +520,48 @@ def _sheet(path, head: str, mass_kg, density, rho: float) -> Optional[Stock]:
     st = Stock("sheet", h_mm=h, l_mm=l, thickness_mm=t, method=method)
     st.blank_mass_kg = round(h * l * t * rho * 1e-6, 6)
     return st
+
+
+def _norm_mark(s) -> str:
+    return re.sub(r"[\s\u00a0]+", "", str(s or "")).lower()
+
+
+def match_bodies(embs: list, bodies) -> dict:
+    """Габарит КОМПАС для каждого исполнения: {индекс строки: (a, b, c)}.
+    Сопоставление по обозначению; если обозначения не сошлись, а число исполнений
+    одинаково, то по порядку (индекс 0 это основное исполнение без суффикса)."""
+    out = {}
+    if not bodies:
+        return out
+    by_mark = {_norm_mark(b.get("marking")): b for b in bodies if b.get("marking")}
+    for k, emb in enumerate(embs):
+        b = by_mark.get(_norm_mark(emb.get("drawing_no")))
+        if b and b.get("dims"):
+            out[k] = tuple(b["dims"])
+    if not out and len(bodies) == len(embs):
+        for k, b in enumerate(bodies):
+            if b.get("dims"):
+                out[k] = tuple(b["dims"])
+    return out
+
+
+def match_kompas(embs: list, bodies) -> dict:
+    """То же, что match_bodies, но с массой: {индекс: {"dims": (...), "mass_kg": x или None}}."""
+    out = {}
+    if not bodies:
+        return out
+    by_mark = {_norm_mark(b.get("marking")): b for b in bodies if b.get("marking")}
+
+    def pack(b):
+        m = b.get("mass_g")
+        return {"dims": tuple(b["dims"]), "mass_kg": (m / 1000.0 if m else None)}
+
+    for k, emb in enumerate(embs):
+        b = by_mark.get(_norm_mark(emb.get("drawing_no")))
+        if b and b.get("dims"):
+            out[k] = pack(b)
+    if not out and len(bodies) == len(embs):
+        for k, b in enumerate(bodies):
+            if b.get("dims"):
+                out[k] = pack(b)
+    return out

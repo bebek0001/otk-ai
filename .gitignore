@@ -59,3 +59,4 @@ build_info.txt
 kompas_batch.log
 kompas_worker.log
 kompas_selftest.txt
+kompas_check.txt

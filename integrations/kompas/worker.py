@@ -37,7 +37,8 @@ def _handlers() -> Dict[str, Callable[[dict], dict]]:
             state["session"] = ses
         r = ses.body(req["path"])
         return {"dims": list(r.dims) if r.dims else None, "error": r.error,
-                "attempts": r.attempts}
+                "attempts": r.attempts, "exact": bool(r.exact),
+                "embs": [dict(e, dims=list(e["dims"]) if e.get("dims") else None) for e in r.embs]}
 
     def close(_req: dict) -> dict:
         ses = state["session"]
