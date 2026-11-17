@@ -94,3 +94,11 @@ def test_export_keeps_size_for_kompas_cross_check_rows():
            "error": "Габарит КОМПАС расходится"}
     out = cf.rows_for_client([row])[0]
     assert "120x230" in str(out)
+
+
+def test_angle_and_square_tube_blank_mass():
+    # уголок 35x35x4 (2,10 кг/м) и труба 30x30x3 (2,36 кг/м): раньше масса заготовки была пустой
+    m = ms._lin_mass("profile", "Уголок 35х35х4", [35, 35], 374, 7.85)
+    assert m is not None and abs(m - 0.785) < 0.01
+    m = ms._lin_mass("tube", "Труба 30х30х3", [30, 30], 360, 7.85)
+    assert m is not None and abs(m - 0.850) < 0.01

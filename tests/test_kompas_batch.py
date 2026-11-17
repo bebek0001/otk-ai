@@ -69,3 +69,26 @@ def test_stock_from_body_sheet_and_linear():
     assert ln.l_mm == 1970.0
     # заготовка меньше детали по площади: отказ
     assert ms.stock_from_body((20, 5, 20), "Лист$d5 ГОСТ 19903-2015;Ст3пс ГОСТ 14637-89$", 0.972, 7850) is None
+
+
+def test_measure_falls_back_to_step(monkeypatch):
+    """Прямой габарит не отдан -> берётся габарит по STEP, документ всё равно закрывается."""
+    monkeypatch.setattr(kb, "_dims_via_step", lambda app, doc, att: (36.0, 36.0, 95.0))
+    doc = _Doc(_Part("никогда"))
+    r = kb.measure(_App(doc), "z.m3d")
+    assert r.dims == (36.0, 36.0, 95.0) and not r.error and doc.closed
+
+
+def test_step_failure_is_reported_not_raised():
+    doc = _Doc(_Part("никогда"))
+    r = kb.measure(_App(doc), "w.m3d")          # у фиктивного документа нет SaveAs
+    assert r.dims is None and r.error and doc.closed
+    assert any(a.startswith("STEP:") for a in r.attempts)
+
+
+def test_log_result_writes_file(tmp_path, monkeypatch):
+    import core.paths as cp
+    monkeypatch.setattr(cp, "USER_DATA_DIR", tmp_path)
+    kb.log_result("C:/x/модель.m3d", kb.BodyResult(error="нет габарита", attempts=["a -> ошибка"]))
+    text = (tmp_path / "kompas_batch.log").read_text(encoding="utf-8")
+    assert "модель.m3d" in text and "нет габарита" in text and "a -> ошибка" in text

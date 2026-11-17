@@ -46,9 +46,15 @@ class KompasWorker:
         if sys.platform == "win32":
             kw["creationflags"] = 0x08000000                   # CREATE_NO_WINDOW
         self._q = queue.Queue()
+        err = subprocess.DEVNULL
+        try:                                                   # ошибки процесса пишем в файл для разбора
+            from core.paths import USER_DATA_DIR
+            err = open(os.path.join(str(USER_DATA_DIR), "kompas_worker.log"), "a", encoding="utf-8")
+        except Exception:                                      # noqa: BLE001
+            pass
         self._proc = subprocess.Popen(
             self._argv or default_argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1, **kw)
+            stderr=err, text=True, encoding="utf-8", bufsize=1, **kw)
         q, out = self._q, self._proc.stdout
 
         def pump() -> None:

@@ -171,6 +171,51 @@ def selftest(path: str, report_path: str) -> str:
     return text
 
 
+def step_dims(path: str) -> Optional[Tuple[float, float, float]]:
+    """Габарит тела по STEP-файлу (OpenCASCADE): три размера по осям модели, мм."""
+    from OCP.STEPControl import STEPControl_Reader
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.Bnd import Bnd_Box
+    reader = STEPControl_Reader()
+    if reader.ReadFile(path) != IFSelect_RetDone:
+        return None
+    reader.TransferRoots()
+    shape = reader.OneShape()
+    box = Bnd_Box()
+    try:
+        BRepBndLib.AddOptimal_s(shape, box, True, False)
+    except Exception:                                          # noqa: BLE001
+        BRepBndLib.Add_s(shape, box)
+    x0, y0, z0, x1, y1, z1 = box.Get()
+    d = (round(x1 - x0, 3), round(y1 - y0, 3), round(z1 - z0, 3))
+    if min(d) <= 0 or max(d) > 1e6:
+        return None
+    return d
+
+
+def _dims_via_step(app, doc, attempts: List[str]) -> Optional[Tuple[float, float, float]]:
+    """Запасной путь: КОМПАС сохраняет открытую модель в STEP, габарит считаем сами."""
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="otk_step_")
+    out = os.path.join(tmp, "model.step")
+    try:
+        from .step_export import export_doc_to_step
+        ok, att = export_doc_to_step(app, doc, out)
+        attempts.extend("STEP: " + a for a in att)
+        if not ok:
+            return None
+        dims = step_dims(out)
+        attempts.append(f"STEP: габарит по файлу STEP -> {dims}")
+        return dims
+    except Exception as e:                                     # noqa: BLE001
+        attempts.append(f"STEP: ошибка {type(e).__name__}: {str(e)[:100]}")
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def measure(app, path: str) -> BodyResult:
     """Открывает модель в КОМПАС (только чтение, скрыто) и читает габарит тела."""
     res = BodyResult()
@@ -201,6 +246,8 @@ def measure(app, path: str) -> BodyResult:
             res.error = "Не удалось получить деталь из документа"
             return res
         res.dims = read_body_dims(top, res.attempts)
+        if res.dims is None:
+            res.dims = _dims_via_step(app, doc, res.attempts)
         if res.dims is None:
             res.error = "КОМПАС не отдал габарит тела"
             res.attempts.append("Похожие имена у объекта детали: " + ", ".join(_similar_names(top)))
@@ -261,9 +308,25 @@ class KompasSession:
         return measure(self.app, os.path.abspath(path))
 
 
+def _write_log_file(text: str) -> None:
+    """Дублирует журнал в файл kompas_batch.log (рядом с программой): его можно
+    прислать для разбора, не копируя из панели разработчика."""
+    try:
+        import datetime
+        from core.paths import USER_DATA_DIR
+        with open(os.path.join(str(USER_DATA_DIR), "kompas_batch.log"), "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {text}\n")
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
 def log_result(path: str, r: BodyResult) -> None:
     name = os.path.basename(path)
     if r.dims:
-        logger.info(f"КОМПАС(фон): {name}: габарит {r.dims}")
+        msg = f"КОМПАС(фон): {name}: габарит {r.dims}"
+        logger.info(msg)
+        _write_log_file(msg + (" | " + "; ".join(r.attempts) if r.attempts else ""))
     else:
-        logger.warn(f"КОМПАС(фон): {name}: {r.error}; попытки: {'; '.join(r.attempts)}")
+        msg = f"КОМПАС(фон): {name}: {r.error}; попытки: {'; '.join(r.attempts)}"
+        logger.warn(msg)
+        _write_log_file(msg)

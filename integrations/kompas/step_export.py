@@ -41,6 +41,54 @@ def _file_ready(path: str) -> bool:
         return False
 
 
+def export_doc_to_step(app, doc, out_path: str):
+    """Сохраняет ОТКРЫТЫЙ документ в STEP (для пакетной обработки). Пробует те же
+    способы, что и export_active_to_step. Возвращает (успех, список попыток)."""
+    attempts: List[str] = []
+    try:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+    except Exception:                                      # noqa: BLE001
+        pass
+    try:
+        doc.SaveAs(out_path)
+        if _file_ready(out_path):
+            attempts.append("doc.SaveAs(path) -> успех")
+            return True, attempts
+        attempts.append("doc.SaveAs(path) -> файл не появился")
+    except Exception as e:                                 # noqa: BLE001
+        attempts.append(f"doc.SaveAs(path) -> ошибка: {str(e)[:100]}")
+    try:
+        converter = getattr(app, "Converter3D", None)
+        if converter is not None:
+            converter.Export3DToSTEP(doc, out_path)
+            if _file_ready(out_path):
+                attempts.append("app.Converter3D.Export3DToSTEP -> успех")
+                return True, attempts
+            attempts.append("app.Converter3D.Export3DToSTEP -> файл не появился")
+        else:
+            attempts.append("app.Converter3D -> нет такого свойства")
+    except Exception as e:                                 # noqa: BLE001
+        attempts.append(f"app.Converter3D.Export3DToSTEP -> ошибка: {str(e)[:100]}")
+    try:
+        from win32com.client import CastTo
+        from .adapter import _typed_module_from_running_app
+        _typed_module_from_running_app(app)
+        doc3d = CastTo(doc, "IKompasDocument3D")
+        method = getattr(doc3d, "ksSaveToSTEP", None) or getattr(doc3d, "SaveToSTEP", None)
+        if method is not None:
+            method(out_path)
+            if _file_ready(out_path):
+                attempts.append("IKompasDocument3D.(ks)SaveToSTEP -> успех")
+                return True, attempts
+            attempts.append("IKompasDocument3D.(ks)SaveToSTEP -> файл не появился")
+        else:
+            attempts.append("IKompasDocument3D -> нет метода (ks)SaveToSTEP")
+    except Exception as e:                                 # noqa: BLE001
+        attempts.append(f"IKompasDocument3D.(ks)SaveToSTEP -> ошибка: {str(e)[:100]}")
+    return False, attempts
+
+
 def export_active_to_step(out_path: str) -> StepExportResult:
     """Экспортирует активный 3D-документ уже запущенного КОМПАСа в STEP."""
     if not is_available():

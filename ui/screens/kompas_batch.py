@@ -146,6 +146,7 @@ class KompasBatchPanel(ctk.CTkFrame):
         from integrations.kompas.client import KompasWorker
         total = len(files)
         used = {"КОМПАС": 0, "файл": 0}
+        kerr: list = []
         try:
             kc = KompasWorker()
             kompas_ok = False
@@ -167,6 +168,8 @@ class KompasBatchPanel(ctk.CTkFrame):
                         resp = kc.body(path)
                         dims = resp.get("dims")
                         body = tuple(dims) if dims else None
+                        if not body and not kerr:
+                            kerr.append(resp.get("error") or "ответ без габарита")
                         kb.log_result(path, kb.BodyResult(
                             dims=body, error=resp.get("error", ""),
                             attempts=resp.get("attempts") or []))
@@ -184,13 +187,13 @@ class KompasBatchPanel(ctk.CTkFrame):
                 kc.close()
         except Exception as e:                                 # noqa: BLE001
             logger.error(f"Пакет КОМПАС: {e}")
-        thread_bridge.post(self._finish, used, total)
+        thread_bridge.post(self._finish, used, total, kerr[0] if kerr else "")
 
-    def _finish(self, used: dict, total: int):
+    def _finish(self, used: dict, total: int, kerr: str = ""):
         from ui.screens import batch_tool as bt
         self._results.sort(key=lambda r: bt._drawing_sort_key(r.get("drawing_no", "")))
         lines = [f"{'№':>3}  {'Обозначение':<20} {'Наименование':<18} "
-                 f"{'Размер':<26} {'Заг.':>8} {'Чист.':>8}  Источник / замечание"]
+                 f"{'Размер':<26} {'Заг.':>8} {'Чист.':>8}  {'Файл':<32} Источник / замечание"]
         for n, r in enumerate(self._results, 1):
             note = r.get("source", "")
             if r.get("error"):
@@ -198,13 +201,15 @@ class KompasBatchPanel(ctk.CTkFrame):
             lines.append(
                 f"{n:>3}  {r.get('drawing_no', ''):<20} {r.get('part_name', '')[:18]:<18} "
                 f"{r.get('stock_size', '')[:26]:<26} {r.get('stock_mass_kg', ''):>8} "
-                f"{r.get('clean_mass_kg', ''):>8}  {note}")
+                f"{r.get('clean_mass_kg', ''):>8}  {r.get('file', '')[:32]:<32} {note}")
         self._write("\n".join(lines))
         self._progress.set(1.0)
         ok = sum(1 for r in self._results if r.get("status") == "ОК")
         self._state.configure(
-            text=f"Готово: файлов {total}, строк {len(self._results)}, без замечаний {ok}. "
-                 f"Габарит из КОМПАС: {used['КОМПАС']}, по содержимому файла: {used['файл']}")
+            text=f"Готово: файлов {total}, строк {len(self._results)} (в модели может быть "
+                 f"несколько исполнений, каждое отдельной строкой), без замечаний {ok}. "
+                 f"Габарит из КОМПАС: {used['КОМПАС']}, по содержимому файла: {used['файл']}"
+                 + (f". КОМПАС габарит не отдал: {kerr}" if kerr and not used["КОМПАС"] else ""))
         for b in (self._btn_add, self._btn_clear, self._btn_run):
             b.configure(state="normal")
         if self._results:

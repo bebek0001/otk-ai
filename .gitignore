@@ -55,3 +55,7 @@ agent/
 *.tar.gz
 
 build_info.txt
+
+kompas_batch.log
+kompas_worker.log
+kompas_selftest.txt
