@@ -268,3 +268,15 @@ def test_match_kompas_carries_mass():
     out = ms.match_kompas([{"drawing_no": "A"}, {"drawing_no": "A-01"}],
                           [{"marking": "A-01", "dims": (1, 2, 3), "mass_g": 2500.0}])
     assert out == {1: {"dims": (1, 2, 3), "mass_kg": 2.5}}
+
+
+def test_with_allowance_sheet_and_bar():
+    from core import m3d_stock as ms
+    sh = ms.Stock("sheet", h_mm=100.0, l_mm=200.0, thickness_mm=4.0, blank_mass_kg=0.628)
+    out = ms.with_allowance(sh, 5)
+    assert (out.h_mm, out.l_mm) == (110.0, 210.0) and abs(out.blank_mass_kg - 0.628 * 110 * 210 / 20000) < 1e-5
+    assert (sh.h_mm, sh.l_mm) == (100.0, 200.0)                  # исходная заготовка не тронута
+    bar = ms.Stock("lin", l_mm=94.0, section="Круг 36", blank_mass_kg=0.75)
+    out = ms.with_allowance(bar, 5)
+    assert out.l_mm == 104.0 and abs(out.blank_mass_kg - 0.75 * 104 / 94) < 1e-5 and out.section == "Круг 36"
+    assert ms.with_allowance(bar, 0) is bar and ms.with_allowance(None, 5) is None

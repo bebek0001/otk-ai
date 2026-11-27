@@ -773,6 +773,13 @@ def _fill_from_stock(result: dict, card: dict, stock, info) -> None:
                            f"({_fmt_mass_ru(round(bm, 3))})")
 
 
+def _m3d_side_allowance() -> float:
+    try:
+        return max(0.0, float(str(settings.load_settings().get("m3d_allowance_side_mm", "5")).replace(",", ".")))
+    except (TypeError, ValueError):
+        return 5.0
+
+
 def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None, kmass=None) -> dict:
     """Модель КОМПАС (.m3d) читается по своему содержимому: свойства (обозначение,
     наименование, сортамент, марка, масса) и габарит тела (core.m3d_stock).
@@ -879,8 +886,14 @@ def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None, kmass
         if stock is not None:
             trace.step("габарит", f"{stock.size_text} ({stock.method}); масса заготовки {stock.blank_mass_kg}",
                        alts=str(stock.alts))
+            raw_stock = stock                      # геометрия без припуска: проверки и наследование
+            side = _m3d_side_allowance()
+            stock = m3d_stock.with_allowance(raw_stock, side)
+            if side:
+                trace.step("припуск", f"+{side:g} мм на сторону (+{2 * side:g} на размер): "
+                           f"{raw_stock.size_text} -> {stock.size_text}")
             _fill_from_stock(result, card, stock, info)
-            mm, bm = info.mass_kg, stock.blank_mass_kg
+            mm, bm = info.mass_kg, raw_stock.blank_mass_kg
             if est_note:
                 result["status"] = "⚠ проверить"
                 result["error"] = est_note
@@ -889,13 +902,13 @@ def process_one_m3d(m3d_path: str, emb: dict = None, base=None, body=None, kmass
                     result["status"] = "⚠ проверить"
                     result["error"] = (f"Масса детали ({_fmt_mass_ru(mm)}) больше массы заготовки "
                                        f"({_fmt_mass_ru(round(bm, 3))}): проверьте массу или сортамент")
-                elif stock.kind == "sheet" and bm > 2.5 * mm:
+                elif raw_stock.kind == "sheet" and bm > 2.5 * mm:
                     result["status"] = "⚠ проверить"
                     result["error"] = (f"Заготовка тяжелее детали в {bm / mm:.1f} раза: проверьте габарит "
                                        f"(в модели возможны лишние тела)")
             if mass_note:
                 result["error"] = (result["error"] + "; " if result.get("error") else "") + mass_note
-            result["_stock"] = stock
+            result["_stock"] = raw_stock
             return result
 
         mat_show = re.sub(r"\s*;\s*", "/ ", card["material"])

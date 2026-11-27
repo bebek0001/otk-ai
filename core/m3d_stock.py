@@ -18,7 +18,7 @@ import collections
 import math
 import re
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 from core import cdw_geometry
@@ -444,6 +444,26 @@ def estimate_from_mass(dims, material: str, mass_kg: Optional[float], density=No
     st = Stock("lin", l_mm=L, section=label, method="оценка по габариту КОМПАС и массе")
     st.blank_mass_kg = round(per_m * L / 1000.0, 6)
     return st
+
+
+def with_allowance(stock: Optional[Stock], side_mm: float) -> Optional[Stock]:
+    """Заготовка с припуском на обработку: side_mm на каждую обрабатываемую поверхность,
+    то есть +2*side_mm к каждому размеру (длине L и ширине H листа, длине сортового проката).
+    Сечение сортамента и толщина листа не меняются. Масса заготовки пересчитывается."""
+    if stock is None or not side_mm or side_mm <= 0:
+        return stock
+    a = 2.0 * side_mm
+    if stock.kind == "sheet":
+        h, l = stock.h_mm + a, stock.l_mm + a
+        k = (h * l) / (stock.h_mm * stock.l_mm) if stock.h_mm and stock.l_mm else 1.0
+        new = replace(stock, h_mm=h, l_mm=l)
+    else:
+        l = stock.l_mm + a
+        k = l / stock.l_mm if stock.l_mm else 1.0
+        new = replace(stock, l_mm=l)
+    if stock.blank_mass_kg is not None:
+        new.blank_mass_kg = round(stock.blank_mass_kg * k, 6)
+    return new
 
 
 def plausible(stock: Optional[Stock], mass_kg: Optional[float]) -> bool:
