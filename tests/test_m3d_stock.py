@@ -102,3 +102,17 @@ def test_angle_and_square_tube_blank_mass():
     assert m is not None and abs(m - 0.785) < 0.01
     m = ms._lin_mass("tube", "Труба 30х30х3", [30, 30], 360, 7.85)
     assert m is not None and abs(m - 0.850) < 0.01
+
+
+def test_rectangular_profile_tube_mass_uses_three_dimensions():
+    # Труба 60x40x3: площадь металла 60*40 - 54*34 = 564 мм².
+    # Масса метра при 7,85 г/см³ ≈ 4,427 кг/м.
+    kind, _, need = ms._linear_section("Труба 60x40x3")
+    assert kind == "tube" and need == [60.0, 40.0]
+    mass = ms._lin_mass(kind, "Труба 60x40x3", need, 1000.0, 7.85)
+    assert abs(mass - 4.4274) < 0.001
+
+
+def test_invalid_rectangular_profile_wall_thickness_has_no_mass():
+    mass = ms._lin_mass("tube", "Труба 60x40x25", [60.0, 40.0, 25.0], 1000.0, 7.85)
+    assert mass is None
