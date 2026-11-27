@@ -322,7 +322,14 @@ def _per_m(kind: str, head: str, need: List[float], rho: float, od: Optional[flo
             per_m = KG_PER_M_CHANNEL.get(int(need[0] / 10))
     if not per_m and kind == "tube":
         n = _nums(head)
-        if len(n) == 2 and n[1] * 2 < n[0]:               # труба D x s
+        if len(n) >= 3:
+            # Прямоугольная/квадратная профильная труба B x H x s.
+            # Площадь металла: B*H - (B-2s)*(H-2s), без учёта радиусов углов.
+            b, h, wall = n[:3]
+            if 0 < wall * 2 < min(b, h):
+                area = b * h - (b - 2 * wall) * (h - 2 * wall)
+                per_m = area * rho / 1_000_000.0
+        elif len(n) == 2 and n[1] * 2 < n[0]:             # круглая труба D x s
             d = od or n[0]
             per_m = math.pi * n[1] * (d - n[1]) * rho / 1000.0
     if per_m:
