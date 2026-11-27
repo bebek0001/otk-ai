@@ -328,7 +328,7 @@ def _per_m(kind: str, head: str, need: List[float], rho: float, od: Optional[flo
             b, h, wall = n[:3]
             if 0 < wall * 2 < min(b, h):
                 area = b * h - (b - 2 * wall) * (h - 2 * wall)
-                per_m = area * rho / 1_000_000.0
+                per_m = area * rho * 1e-3
         elif len(n) == 2 and n[1] * 2 < n[0]:             # круглая труба D x s
             d = od or n[0]
             per_m = math.pi * n[1] * (d - n[1]) * rho / 1000.0
